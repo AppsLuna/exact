@@ -401,9 +401,11 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const shown = await until(() => nagShown(), msTo(minuteOf(group), 150_000), 2000);
       check('android', 'inexact: the nag shows', !!shown, null);
       check('android', 'the service was refused, so the app plays nothing', /Background started FGS: Disallowed[^\n]*pinkoo\.nag\.NagService/.test(logcat()) && !playing(), null);
-      // Decision 5: it sounds itself, on the ring channel, insistent (FLAG_INSISTENT, 0x4), played by the system.
-      const flags = Number.parseInt((shown?.match(/ flags=0x([0-9a-f]+)/) ?? [])[1] ?? '0', 16);
-      check('android', 'it sounds itself on the ring channel, insistent', channelOf(shown) === 'pinkoo.nag.ring' && (flags & 4) !== 0, shown?.slice(0, 400));
+      // Decision 5: it sounds itself, on the ring channel, insistent (FLAG_INSISTENT, 0x4), played by the system. The
+      // notification's flags print as hex on some versions and by name on others (Android 16: `flags=ONGOING_EVENT|INSISTENT|…`).
+      const flags = (shown?.match(/ flags=(\S+)/) ?? [])[1] ?? '';
+      const insistent = /^0x[0-9a-f]+$/i.test(flags) ? (Number.parseInt(flags, 16) & 4) !== 0 : flags.split('|').includes('INSISTENT');
+      check('android', 'it sounds itself on the ring channel, insistent', channelOf(shown) === 'pinkoo.nag.ring' && insistent, shown?.slice(0, 400));
       save('11-sound.txt', sh('dumpsys notification | grep -iE "mSoundNotificationKey|mVibrateNotificationKey"'));
       check('android', 'and the system plays its sound', new RegExp(`mSoundNotificationKey=[^\\n]*\\|${id.replaceAll('.', '\\.')}\\|`).test(sh('dumpsys notification')), null);
       const quiet = await until(() => /waiting/.test(channelOf(nagShown())), 180_000, 3000);
