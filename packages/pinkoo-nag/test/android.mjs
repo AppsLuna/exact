@@ -13,7 +13,7 @@
 //   --only 1,12  drives only those steps of android-drive.mjs (1 runs steps 1 to 7, which build on each other);
 //                `--steps` is the same flag
 //   --fast       the fixture's 1/1-minute ladder with a 10-second ring instead of 20, step 1's dose sooner and one
-//                minute of forced Doze instead of five: about 12 minutes of driving instead of 18
+//                minute of forced Doze instead of five: about 14 minutes of driving instead of 20
 //   Both are for iterating only. Work that touches the engine is finished only after a whole run with the fixture's
 //   own timings passes: `--emulator <serial>` with neither flag.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

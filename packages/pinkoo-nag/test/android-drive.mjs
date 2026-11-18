@@ -13,7 +13,9 @@
 //  5. The fourth rung: an unlock opens the nag route, with no background activity start blocked; with the bubble
 //     closed too, when the start rests on the overlay access alone.
 //  6. A promise: the promise notification counts down, the next alarm is its deadline; on 36.1 and later it is a
-//     Live Update (promoted). 7. Taken: no notification, service, overlay or nag alarm left.
+//     Live Update (promoted). While promised no service runs and an unlock opens nothing; at the deadline it rings at
+//     the same rung (decision 4), the bubble and the opening at an unlock back.
+//  7. Taken: no notification, service, overlay or nag alarm left.
 //  8. A reboot mid-ladder, locked with a PIN: the alarm is set again at boot and the next nag rings, audibly, before
 //     the first unlock (the sound's own file is in credential-encrypted storage then).
 //  9. A force-stop: nothing until the app is launched; then the overdue nag rings at once.
@@ -23,7 +25,8 @@
 //     climbs.
 // 12. Every nag its own full-screen nag: the first and the second over the keyguard (a new notification each). Then a
 //     process the alarm started, with no activity: the bubble hides over the app the waiting notification opens (the
-//     module is made after that resume), and a pause and a resume post nothing again.
+//     module is made after that resume), and a pause and a resume post nothing again. The bubble closed on its cross
+//     and the process gone: a new process keeps it closed until the next nag brings it back.
 //
 // The emulator is left as found: the fixture uninstalled, the ringer normal, no PIN, the battery and Doze reset.
 //
@@ -89,6 +92,9 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   const nagShown = () => notifications().find((r) => NAGS.some((n) => r.includes(n)));
   const promiseShown = () => notifications().find((r) => r.includes(PROMISE));
   const channelOf = (r) => (r?.match(/channel=([\w.]+)/) ?? [])[1] ?? (r?.match(/mChannelId=([\w.]+)/) ?? [])[1] ?? '';
+  /** The notification's text: the mascot's line of its rung (the fixture has one line on each rung from 1). */
+  const textOf = (r) => (r?.match(/android\.text=String \((.*)\)\s*$/m) ?? [])[1] ?? null;
+  const LINE3 = 'Every unlock, until you do.';
   let uid = '?';
   /** One of our players on the alarm stream, started (`dumpsys audio`'s playback configurations). */
   const playing = () => sh('dumpsys audio').split('\n').some((l) => l.includes('AudioPlaybackConfiguration') && l.includes(`u/pid:${uid}/`) && /state:started/.test(l) && /USAGE_ALARM/.test(l));
@@ -292,6 +298,32 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       if (sdk >= 36 && sdkFull !== '36.0') check('android', 'the promise is a Live Update', promoted, null);
       else check('android', 'no Live Update on this image (36.0)', !promoted, null);
       shot('06-promise.png');
+      // Decision 4: while promised the opening at an unlock pauses, and nothing holds the process. (The bubble, closed
+      // on its cross in step 5, stays closed until the next nag anyway: its pause is NuisanceTest's.)
+      home();
+      await wait(3000);
+      check('android', 'promised: no service holds the process', !/NagService/.test(services()), services().slice(0, 300));
+      sh('input keyevent KEYCODE_SLEEP');
+      await wait(1500);
+      sh('input keyevent KEYCODE_WAKEUP');
+      sh('wm dismiss-keyguard');
+      await wait(4000);
+      check('android', 'and an unlock opens nothing', !/MainActivity|\.Notify/.test(top()), top());
+      // At its deadline it nags again at the same rung: a promise never resets the ladder.
+      check('android', 'at the deadline it rings again', !!(await until(() => playing(), 100_000, 1000)), null);
+      check('android', 'at the same rung, 3: its line', (await until(() => textOf(nagShown()) === LINE3, 8000)) === true, textOf(nagShown()));
+      check('android', 'and the bubble is back', !!(await until(() => overlay(), 8000)), null);
+      // Once it rang out, from the home screen (its full-screen nag may have taken the screen at the deadline).
+      await until(() => !playing(), 40_000, 1000);
+      sh('wm dismiss-keyguard');
+      home();
+      await until(() => !/MainActivity|\.Notify/.test(top()), 6000, 700);
+      sh('input keyevent KEYCODE_SLEEP');
+      await wait(1500);
+      sh('input keyevent KEYCODE_WAKEUP');
+      sh('wm dismiss-keyguard');
+      check('android', 'and so is the opening at an unlock', !!(await until(() => /MainActivity|\.Notify/.test(top()) && find(/via=unlock/), 12000, 1000)), top());
+      shot('06-deadline.png');
 
       // 7. Taken: nothing left.
       await press('Done');
@@ -465,6 +497,19 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       home();
       await wait(1500);
       check('android', 'a pause and a resume post nothing again', !!before && stamp() === before, `${before} ${stamp()}`);
+      // The bubble closed on its cross, then the process gone: a new process keeps it closed (the engine's state file)
+      // until the next nag brings it back.
+      const [w, h] = (sh('wm size').match(/(\d+)x(\d+)/) ?? [0, 1080, 2400]).slice(1).map(Number);
+      const at = await until(() => bubbleAt(), 8000, 700);
+      if (at) sh(`input swipe ${at.x} ${at.y} ${w >> 1} ${h - Math.round(h / 12)} 1500`);
+      check('android', 'the bubble closed on its cross', !!at && !!(await until(() => !overlay(), 5000)), at);
+      await until(() => { sh(sdk >= 34 ? `am stop-app ${id}` : `am kill ${id}`); return !pid(); }, 15000, 1500);
+      launch();
+      await wait(2500);
+      home();
+      await wait(3000);
+      check('android', 'a new process keeps it closed', !playing() && !overlay(), sh(`dumpsys window windows | grep -i ${id} | head -5`));
+      check('android', 'until the next nag brings it back', !!(await until(() => playing(), 100_000, 1000)) && !!(await until(() => overlay(), 8000)), null);
       launch();
       await press('Take');
       await until(() => !playing() && !nagShown(), 10000);
