@@ -342,10 +342,15 @@ class ExtensionContext internal constructor(val application: Context, private va
      * The intent a tap on what this extension posts starts (a notification's content intent or action, LLP 1133.004
      * D6; LLP 1133.004.000 D4): the app's unexported alias, which comes forward and opens [navigate] as a link's
      * location, or, without one, raises the interface's event [event] with [args] with a person's origin, once the
-     * session can hear it. A `PendingIntent` made from it is the app's alone to send.
+     * session can hear it. A `PendingIntent` made from it is the app's alone to send. With [overLock] the activity
+     * shows over the keyguard and turns the screen on, as a full-screen intent's should ([showOverLock]).
      */
-    fun activation(event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
-        Activations.intent(application, name, event, args, navigate)
+    fun activation(event: String, args: JSONArray, navigate: String? = null, overLock: Boolean = false): android.content.Intent =
+        Activations.intent(application, name, event, args, navigate, overLock)
+
+    /** Whether the activity shows over the keyguard and turns the screen on, as an `overLock` [activation] sets it
+     * before its first frame: the extension clears it when what it showed there closes. Main thread. */
+    fun showOverLock(on: Boolean) { activity?.let { Activations.overLock(it, on) } }
 
     /**
      * The platform's dialog for [permissions], in one request (`Activity.requestPermissions`), then [done], on the main
@@ -429,8 +434,8 @@ class ExtensionContext internal constructor(val application: Context, private va
 
         /** [ExtensionContext.activation] for extension [extension] with no session: a receiver's, which posts what an
          * extension scheduled while the app was not running. */
-        @JvmStatic fun activation(context: Context, extension: String, event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
-            Activations.intent(context, extension, event, args, navigate)
+        @JvmStatic fun activation(context: Context, extension: String, event: String, args: JSONArray, navigate: String? = null, overLock: Boolean = false): android.content.Intent =
+            Activations.intent(context, extension, event, args, navigate, overLock)
 
         /**
          * The intent a notification's action starts (LLP 1133.004 stage 2): [event] of [extension] with [args], the

@@ -1,5 +1,6 @@
 package dev.exact.canvas
 
+import android.app.Activity
 import android.app.NotificationManager
 import android.app.RemoteInput
 import android.content.ComponentName
@@ -28,6 +29,10 @@ import org.json.JSONObject
  *
  * Raised once the first frame is drawn: a tap that starts the process waits for the session that hears it. Main
  * thread.
+ *
+ * An activation made `overLock` (a full-screen intent's) shows the activity over the keyguard and turns the screen on
+ * ([overLock]) as it is made, before its first frame: an extension is made at that frame, too late to do it on an
+ * activity behind the keyguard, which may never draw. Only the alias carries it, so no other app can.
  */
 internal object Activations {
     /** The alias the shell's manifest declares. */
@@ -39,6 +44,7 @@ internal object Activations {
     private const val CHOSEN = "dev.exact.activation.chosen"
     private const val CLOSE_TAG = "dev.exact.activation.close.tag"
     private const val CLOSE_ID = "dev.exact.activation.close.id"
+    private const val OVER_LOCK = "dev.exact.activation.overLock"
     /** The key of an action's text field (`RemoteInput`). */
     const val REPLY = "exact.reply"
 
@@ -49,10 +55,12 @@ internal object Activations {
     private class Held(val extension: String, val event: String?, val args: String, val action: String? = null)
     private val held = ArrayList<Held>()
 
-    /** The intent a tap starts: the alias, at [navigate] when given, else raising [event] of [extension] with [args]. */
-    fun intent(context: Context, extension: String, event: String, args: JSONArray, navigate: String?): Intent {
+    /** The intent a tap starts: the alias, at [navigate] when given, else raising [event] of [extension] with [args];
+     * shown over the keyguard when [overLock]. */
+    fun intent(context: Context, extension: String, event: String, args: JSONArray, navigate: String?, overLock: Boolean = false): Intent {
         val intent = Intent().setComponent(ComponentName(context.packageName, ALIAS))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (overLock) intent.putExtra(OVER_LOCK, true)
         if (!navigate.isNullOrEmpty()) return intent.setAction(Intent.ACTION_VIEW).setData(Uri.parse(navigate))
         return intent.putExtra(EXTENSION, extension).putExtra(EVENT, event).putExtra(ARGS, args.toString())
     }
@@ -65,6 +73,19 @@ internal object Activations {
 
     /** Whether [intent] reached the app through the alias. */
     fun aliased(intent: Intent): Boolean = intent.component?.className == ALIAS
+
+    /** [activity] shown over the keyguard, turning the screen on, when [intent] is an over-lock activation through the
+     * alias; the extra is taken off, so a recreated activity does not read it again. */
+    fun overLock(activity: Activity, intent: Intent) {
+        if (!intent.getBooleanExtra(OVER_LOCK, false)) return
+        intent.removeExtra(OVER_LOCK)
+        if (aliased(intent)) overLock(activity, true)
+    }
+
+    fun overLock(activity: Activity, on: Boolean) {
+        activity.setShowWhenLocked(on)
+        activity.setTurnScreenOn(on)
+    }
 
     /**
      * Whether [intent] carried an activation: taken off it, so a recreated activity does not raise it again. One that

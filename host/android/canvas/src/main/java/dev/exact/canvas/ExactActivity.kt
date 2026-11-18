@@ -87,6 +87,7 @@ open class ExactActivity : Activity() {
         Exact.unshown = false
         take()
         super.onCreate(state)
+        Activations.overLock(this, intent)
         nativeState = state?.getBundle("exact.hosted")
         hatchReader?.activity = this
         // The starting window goes the moment the first frame is drawn, not after its exit fade (splashfade=1: the
@@ -142,6 +143,7 @@ open class ExactActivity : Activity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        Activations.overLock(this, intent)
         received(intent)
     }
 
