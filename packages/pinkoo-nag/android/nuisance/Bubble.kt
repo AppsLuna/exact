@@ -1,7 +1,9 @@
 // The bubble: the mascot in a small round window over other apps (`TYPE_APPLICATION_OVERLAY`, which the person allows in
 // Settings as "Display over other apps"). It can be dragged and snaps to the nearer edge; a tap opens the nag route;
-// dragged onto the close target it closes, which is the nag's ignore, until the next nag. It hides while the app is in
-// front. It moves only in short bursts, every 20 seconds while the screen is on, and asks for no frames otherwise.
+// dragged onto the close target it closes, which is the nag's ignore, until the next nag (kept in the state, so a
+// process death does not bring it back). It hides whenever the app's activity is resumed, however it came to the front.
+// It shows the face of the nag it opens. It moves only in short bursts, every 20 seconds while the screen is on, and asks
+// for no frames otherwise.
 package pinkoo.nag
 
 import android.animation.ValueAnimator
@@ -29,10 +31,8 @@ internal object Bubble : Nuisance {
 
     override fun allowed(c: Context): Boolean = Settings.canDrawOverlays(c)
 
-    /** The app's activity is in front (`NagModule.foreground`). */
+    /** The app's activity is resumed: the module reads it when it is made and hears each resume and pause. */
     @Volatile var appInFront = false
-    /** The nag the person closed the bubble in: it stays closed until the next. */
-    var closedNag = 0
     private var view: BubbleView? = null
     private var target: CloseTarget? = null
     private var last: Live? = null
@@ -47,12 +47,12 @@ internal object Bubble : Nuisance {
         }
     }
 
-    /** Whether the bubble window shows now, which an activity start from the background relies on. */
-    val showing: Boolean get() = view?.isAttachedToWindow == true
+    /** Whether the bubble's window is up. */
+    val shown: Boolean get() = view != null
 
     override fun apply(c: Context, live: Live, on: Boolean) {
         last = live
-        if (on && !appInFront && live.nag != closedNag && live.groups.isNotEmpty()) show(c.applicationContext, live) else hide()
+        if (on && !appInFront && live.nag != live.st.bubbleClosed && live.groups.isNotEmpty()) show(c.applicationContext, live) else hide()
     }
 
     private fun wm(c: Context) = c.getSystemService(WindowManager::class.java)
@@ -64,11 +64,11 @@ internal object Bubble : Nuisance {
     ).apply { this.gravity = gravity }
 
     private fun show(c: Context, live: Live) {
-        view?.let { it.mascot = MascotDrawable.of(live.plan, live.rung); it.contentDescription = live.plan.texts.bubble; return }
+        view?.let { it.paint(live); return }
         val size = dp(c, 64)
         val metrics = c.resources.displayMetrics
         if (x < 0) { x = metrics.widthPixels - size - dp(c, 8); y = metrics.heightPixels / 3 }
-        val v = BubbleView(c, size).apply { mascot = MascotDrawable.of(live.plan, live.rung); contentDescription = live.plan.texts.bubble }
+        val v = BubbleView(c, size).apply { paint(live) }
         val p = params(c, size, Gravity.TOP or Gravity.START).apply { x = this@Bubble.x; y = this@Bubble.y }
         runCatching { wm(c).addView(v, p) }.onFailure { android.util.Log.w("pinkoo.nag", "bubble: $it"); return }
         view = v
@@ -105,15 +105,22 @@ internal object Bubble : Nuisance {
 
     private fun closed(c: Context) {
         val live = last ?: return
-        closedNag = live.nag
         hide()
-        Engine.ignore(c, live.nag, "bubble")
+        Engine.bubbleClosed(c, live.nag)
     }
 
     @SuppressLint("ViewConstructor")
     private class BubbleView(c: Context, val size: Int) : View(c) {
         var mascot: MascotDrawable? = null
             set(v) { field = v; invalidate() }
+        /** The plan and rung drawn: a refresh that changes neither draws nothing. */
+        private var drawn = -1L
+
+        fun paint(live: Live) {
+            val key = live.plan.made * 16 + live.face
+            if (key != drawn) { drawn = key; mascot = MascotDrawable.of(live.plan, live.face) }
+            contentDescription = live.plan.texts.bubble
+        }
         private val face = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
         private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF1E3D7.toInt(); style = Paint.Style.STROKE; strokeWidth = 2 * c.resources.displayMetrics.density }
         private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x332B2233 }

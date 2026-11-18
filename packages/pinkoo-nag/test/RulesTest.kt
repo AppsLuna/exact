@@ -26,16 +26,18 @@ class RulesTest {
         val o = NagFixtures.plan(pillA)
         val reversed = org.json.JSONArray((o.getJSONArray("rungs").length() - 1 downTo 0).map { o.getJSONArray("rungs").get(it) })
         val p = Plan.parse(o.put("rungs", reversed))
-        assertEquals(listOf(0, 1, 2, 3), p.rungs.map { it.ignores })
+        assertEquals(listOf(0, 1, 2, 3, 4), p.rungs.map { it.ignores })
         assertEquals(setOf("ring", "fullScreen", "returning", "bubble"), p.words(2))
+        assertEquals("the top rung adds nothing of its own", p.words(3), p.words(4))
         assertEquals(listOf("a@2026-11-18T08:00"), p.doses.map { it.key })
-        assertEquals(listOf(0, 1, 2, 3, 3), (0..4).map(p::rung))
+        assertEquals("one rung per ignore up to the top, 4, as the mascot's", listOf(0, 1, 2, 3, 4, 4, 4), (0..6).map(p::rung))
         assertEquals(20 * 60_000L, p.interval(1))
         assertEquals(15 * 60_000L, p.interval(2))
         assertEquals(1.0, p.volume(5), 0.0)
         assertEquals("b0", p.line(0, 0, 1))
-        assertEquals("the top rung's lines for any above", "a3", p.line(7, 5, 2))
-        assertEquals(7, p.idle.afterDays)
+        assertEquals("the top rung's lines for any above", "d4", p.line(7, 5, 2))
+        assertEquals(6, p.idle.afterDays)
+        assertEquals("the notice comes on day 6 when the plan names no day", 6, Plan.parse(NagFixtures.plan(pillA).apply { remove("idle") }).idle.afterDays)
         // The mascot may come as its JSON text (`json<any>`).
         assertEquals(1, Plan.parse(NagFixtures.plan(pillA).put("mascot", "{\"viewBox\":[0,0,1,1],\"parts\":[{\"t\":\"circle\",\"r\":1}]}")).mascot(0)?.parts?.size)
         // A dose with a malformed time is dropped, not guessed.
@@ -190,8 +192,8 @@ class RulesTest {
         assertEquals(at("2026-11-18T08:21"), Rules.next(p, st, sp))
         st.groups.getValue("2026-11-18T08:00").nextAt = at("2026-11-18T12:30")
         assertEquals(at("2026-11-18T12:00"), Rules.next(p, st, sp))
-        st.planAt = at("2026-11-11T07:00")
-        assertEquals("the stale notice, a week after the last plan", at("2026-11-18T07:00"), Rules.next(p, st, sp))
+        st.planAt = at("2026-11-12T07:00")
+        assertEquals("the stale notice, six days after the last plan", at("2026-11-18T07:00"), Rules.next(p, st, sp))
         st.staleShown = st.planAt
         assertEquals(at("2026-11-18T12:00"), Rules.next(p, st, sp))
     }
@@ -217,6 +219,78 @@ class RulesTest {
         // Removing the medication drops its open dose.
         Rules.merge(plan(made = at("2026-11-18T08:13")), st, at("2026-11-18T08:13"))
         assertTrue(st.groups.isEmpty() && st.doses.isEmpty())
+    }
+
+    /**
+     * The one rule the nag screen shares (`src/app/plan.ts` nagRung and nagLineIndex): the rung is the group's ignores
+     * up to the top, 4, and its line is `lines[rung][(seed + ignores) mod count]`, the seed being the group's first open
+     * dose's. No other counter moves it: another group's nags leave it as it is.
+     */
+    @Test fun aNagsLineIsItsFirstOpenDosesSeedPlusItsIgnoresOnItsRung() {
+        val a = NagFixtures.dose("a@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T23:00", "Pill A", seed = 4_294_967_295)
+        val b = NagFixtures.dose("b@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T23:00", "Pill B", seed = 1)
+        val noon = NagFixtures.dose("c@2026-11-18T07:30", "2026-11-18T07:30", "2026-11-18T23:00", "Pill C", seed = 9)
+        val p = plan(a, b, noon)
+        val st = State()
+        Rules.merge(p, st, 0)
+        val ev = ArrayList<Event>()
+        val g = st.groups.getValue("2026-11-18T08:00")
+        var t = at("2026-11-18T08:00")
+        for (ignores in 0..6) {
+            assertEquals(ignores, g.ignores)
+            val rung = minOf(4, ignores)
+            val lines = NagFixtures.lines[rung]
+            assertEquals("ignores $ignores", lines[((4_294_967_295L + ignores) % lines.size).toInt()], Rules.line(p, st, g))
+            // The other group rings in between: the global nag number moves, the line does not.
+            Rules.fire(p, st, listOf(st.groups.getValue("2026-11-18T07:30")), t, ev)
+            assertEquals(lines[((4_294_967_295L + ignores) % lines.size).toInt()], Rules.line(p, st, g))
+            val nag = Rules.fire(p, st, listOf(g), t, ev)
+            Rules.ignore(p, st, nag, "notNow", t + 1_000, ev)
+            t = g.nextAt!!
+        }
+        // Its first dose resolved, the seed is the next open one's.
+        Rules.resolve(p, st, listOf(a.getString("key")), "taken", null, t, sp)
+        assertEquals(NagFixtures.lines[4][((1L + 7) % 4).toInt()], Rules.line(p, st, g))
+    }
+
+    /** Decision 5: a new pace keeps the next nag already set; it applies from the one after. */
+    @Test fun aNewPaceAppliesFromTheNagAfterTheNext() {
+        val st = State()
+        Rules.merge(plan(pillA), st, 0)
+        val ev = ArrayList<Event>()
+        val nag = Rules.fire(plan(pillA), st, Rules.due(plan(pillA), st, at("2026-11-18T08:00"), sp), at("2026-11-18T08:00"), ev)
+        Rules.ignore(plan(pillA), st, nag, "timeout", at("2026-11-18T08:01"), ev)
+        val insistent = plan(pillA, first = 10, repeat = 5, made = at("2026-11-18T08:05"))
+        Rules.merge(insistent, st, at("2026-11-18T08:05"))
+        assertEquals("the nag already set stays", at("2026-11-18T08:21"), Rules.next(insistent, st, sp))
+        val second = Rules.fire(insistent, st, Rules.due(insistent, st, at("2026-11-18T08:21"), sp), at("2026-11-18T08:21"), ev)
+        Rules.ignore(insistent, st, second, "swipe", at("2026-11-18T08:22"), ev)
+        assertEquals("then the new pace's", at("2026-11-18T08:27"), Rules.next(insistent, st, sp))
+    }
+
+    /** Decision 4: a promise never resets the ladder. Its deadline's nag rings at the rung she had, and an ignore of it
+     * climbs from there. */
+    @Test fun aPromisesDeadlineNagsAtTheSameRung() {
+        val p = plan(pillA)
+        val st = State()
+        Rules.merge(p, st, 0)
+        val ev = ArrayList<Event>()
+        var t = at("2026-11-18T08:00")
+        repeat(3) { val nag = Rules.fire(p, st, Rules.due(p, st, t, sp), t, ev); Rules.ignore(p, st, nag, "notNow", t + 1_000, ev); t = Rules.next(p, st, sp)!! }
+        val g = st.groups.values.single()
+        assertEquals(3, Rules.rung(p, g))
+        Rules.resolve(p, st, listOf(pillA.getString("key")), "promised", t + 20 * 60_000L, t, sp)
+        assertEquals("promised", g.state)
+        assertEquals(3, Rules.rung(p, g))
+        assertEquals("promised", Rules.doses(p, st).single().getString("state"))
+        assertEquals(3, Rules.doses(p, st).single().getInt("rung"))
+        val deadline = t + 20 * 60_000L
+        assertTrue(Rules.due(p, st, deadline - 1, sp).isEmpty())
+        val nag = Rules.fire(p, st, Rules.due(p, st, deadline, sp), deadline, ev)
+        assertEquals("ringing", g.state)
+        assertEquals("the same rung", 3, Rules.rung(p, g))
+        Rules.ignore(p, st, nag, "timeout", deadline + 60_000, ev)
+        assertEquals(4, Rules.rung(p, g))
     }
 
     @Test fun dosesAtTheSameTimeAreOneNagAndOneResolvedLeavesTheOther() {

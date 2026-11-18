@@ -19,6 +19,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -28,6 +29,22 @@ import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
+
+/**
+ * What a ring plays, in order. Her alarm sound through the settings' default URI first: `MediaPlayer` plays it from the
+ * ringtone cache in device-protected storage, so the ring sounds before the first unlock after a boot, when the sound's
+ * own file (`content://media/…`) cannot be read; then that file. With her alarm sound set to None, her ringtone the
+ * same way (decision 5), and the notification sound last.
+ */
+internal object Sounds {
+    fun ring(c: Context): List<Uri> {
+        fun set(type: Int) = runCatching { RingtoneManager.getActualDefaultRingtoneUri(c, type) }.getOrElse { Settings.System.DEFAULT_ALARM_ALERT_URI }
+        val alarm = set(RingtoneManager.TYPE_ALARM)
+        val ringtone = set(RingtoneManager.TYPE_RINGTONE)
+        return (listOfNotNull(Settings.System.DEFAULT_ALARM_ALERT_URI.takeIf { alarm != null }, alarm,
+            Settings.System.DEFAULT_RINGTONE_URI.takeIf { ringtone != null }, ringtone) + Settings.System.DEFAULT_NOTIFICATION_URI).distinct()
+    }
+}
 
 class NagService : Service() {
     companion object {
@@ -61,16 +78,11 @@ class NagService : Service() {
         }
 
         /**
-         * The person's alarm sound on the alarm stream, which Do Not Disturb lets through by default, looping at [volume]
-         * of the stream's level (`MediaPlayer.setVolume` scales this player alone). The settings' default URIs come
-         * first: `MediaPlayer` plays them from the ringtone cache in device-protected storage, so the ring sounds before
-         * the first unlock after a boot, when the sound's own file (`content://media/…`) cannot be read. Then the
-         * sound itself, the ringtone and the notification sound, should the alarm sound be none.
+         * The person's alarm sound ([Sounds.ring]) on the alarm stream, which Do Not Disturb lets through by default,
+         * looping at [volume] of the stream's level (`MediaPlayer.setVolume` scales this player alone).
          */
         internal fun player(c: Context, volume: Double): MediaPlayer? {
-            val uris = listOfNotNull(Settings.System.DEFAULT_ALARM_ALERT_URI, RingtoneManager.getActualDefaultRingtoneUri(c, RingtoneManager.TYPE_ALARM),
-                Settings.System.DEFAULT_RINGTONE_URI, Settings.System.DEFAULT_NOTIFICATION_URI).distinct()
-            for (uri in uris) {
+            for (uri in Sounds.ring(c)) {
                 val p = MediaPlayer()
                 try {
                     p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
@@ -117,26 +129,29 @@ class NagService : Service() {
         // A service started with startForegroundService must enter the foreground, or the system ends the app; and it
         // stops at once when nothing needs it any more (resolved, opened or ignored before it started).
         val shown = live != null && live.groups.isNotEmpty() &&
-            runCatching { update(live); true }.onFailure { android.util.Log.e("pinkoo.nag", "service", it) }.getOrDefault(false)
-        if (!shown) enter(Notification.Builder(this, Shade.CH_WAITING).setSmallIcon(Shade.icon(this)).build())
+            runCatching { update(live); foreground }.onFailure { android.util.Log.e("pinkoo.nag", "service", it) }.getOrDefault(false)
+        // A bare notification, which finish replaces with the waiting nag or takes away.
+        if (!shown) enter(Shade.nagId(live?.nag ?: 0), Notification.Builder(this, Shade.CH_WAITING).setSmallIcon(Shade.icon(this)).build())
         if (live == null || !shown || !needed(this, live)) finish(live)
         release()
         return START_NOT_STICKY
     }
 
-    private fun enter(n: Notification) {
+    /** In the foreground with [n] as [id]: a new id (a new loud nag) replaces the notification the service had. */
+    private fun enter(id: Int, n: Notification) {
         if (Build.VERSION.SDK_INT >= 34) {
             val exact = getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
             val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or (if (exact) ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED else 0)
-            startForeground(Shade.NAG, n, types)
-        } else startForeground(Shade.NAG, n)
+            startForeground(id, n, types)
+        } else startForeground(id, n)
         foreground = true
     }
 
     /** The notification, the ring and the nuisances brought to [live]; a nuisance that fails stops neither the ring nor
-     * the others. */
+     * the others. The notification is posted only when it changed, but always as the service enters the foreground,
+     * which a start for the foreground must. */
     internal fun update(live: Live) {
-        enter(Shade.nag(this, live, loud = live.ringing.isNotEmpty()))
+        Shade.nag(this, live, loud = live.ringing.isNotEmpty(), force = !foreground) { id, n -> enter(id, n) }
         runCatching { ring(live) }.onFailure { android.util.Log.e("pinkoo.nag", "ring", it) }
         runCatching { Nuisances.apply(this, live) }.onFailure { android.util.Log.e("pinkoo.nag", "nuisances", it) }
     }
@@ -148,9 +163,12 @@ class NagService : Service() {
         if (foreground) {
             val waiting = live != null && live.groups.isNotEmpty() && !(live.st.swiped == live.nag && !Nuisances.returning(this, live))
             if (waiting) {
-                Shade.post(this, Shade.NAG, Shade.nag(this, live!!, loud = false))
+                Shade.nag(this, live!!, loud = false, force = true) { id, n -> Shade.notify(this, id, n) }
                 stopForeground(STOP_FOREGROUND_DETACH)
-            } else stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                Shade.cancelNag(this)
+            }
             foreground = false
         }
         running = null

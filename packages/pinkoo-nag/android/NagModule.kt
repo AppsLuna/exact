@@ -10,6 +10,7 @@ package pinkoo.nag
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
@@ -32,17 +33,24 @@ import java.lang.ref.WeakReference
 
 class NagModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
+        /** How long the nag route celebrates a confirmation over the lock screen before the keyguard covers it again. */
+        const val CELEBRATE_MS = 3_000L
         @Volatile private var live: WeakReference<NagModule>? = null
         internal fun changed() { live?.get()?.let { it.context.changed("nag.nagState"); it.context.changed("nag.nagStatus") } }
     }
 
     private val app: Context get() = context.application
     private var preview: MediaPlayer? = null
+    private val main = Handler(Looper.getMainLooper())
+    /** The keyguard back over the app, unless she unlocked meanwhile. */
+    private val lockAgain = Runnable { if (keyguardLocked()) context.showOverLock(false) }
 
     init {
         if (!context.agent) {
             live = WeakReference(this)
-            Engine.restore(app)
+            // Made at the first frame, after the activity resumed (a tap through the notification's alias, a launch):
+            // no resume reaches this module for it, so it reads whether the activity is resumed now.
+            front(context.resumed)
         }
     }
 
@@ -60,11 +68,14 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 if (kind !in setOf("taken", "skipped", "promised")) return reply(JSONObject().put("error", "TypeError"))
                 val until = if (args.isNull("until") || !args.has("until")) null else args.optDouble("until").toLong()
                 if (kind == "promised" && until == null) return reply(JSONObject().put("error", "TypeError"))
-                Engine.resolve(app, strings(args.optJSONArray("keys")), kind, until)
+                val keys = strings(args.optJSONArray("keys"))
+                Engine.resolve(app, keys, kind, until)
+                if (!context.agent) celebrate(keys)
                 reply(JSONObject())
             }
             "ackNagEvents" -> { args.optString("through").toLongOrNull()?.let { Engine.ack(app, it) }; reply(JSONObject()) }
             "nagScreen" -> {
+                main.removeCallbacks(lockAgain)
                 if (args.optBoolean("showing")) Engine.opened(app, strings(args.optJSONArray("keys")))
                 else context.showOverLock(false)
                 reply(JSONObject())
@@ -89,10 +100,25 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     override fun foreground(shown: Boolean) { if (shown) changed() }
 
     override fun destroy(done: () -> Unit) {
-        if (live?.get() === this) live = null
-        Bubble.appInFront = false
+        main.removeCallbacks(lockAgain)
+        // A module that goes after the next one was made leaves the activity's state to that one.
+        if (live?.get() === this) { live = null; Bubble.appInFront = false }
         done()
     }
+
+    /**
+     * Decision 5: [keys] confirmed (or promised) on the route the full-screen nag showed over the lock screen, and
+     * nothing of their nag left to do: the route celebrates for [CELEBRATE_MS], then the keyguard covers the app again.
+     * A new nag shown meanwhile (`nagScreen`) keeps it. The activity can be resumed under a locked keyguard only over
+     * it, which an over-lock activation alone allows.
+     */
+    private fun celebrate(keys: List<String>) {
+        if (!context.resumed || !keyguardLocked() || !Engine.settled(app, keys)) return
+        main.removeCallbacks(lockAgain)
+        main.postDelayed(lockAgain, CELEBRATE_MS)
+    }
+
+    private fun keyguardLocked(): Boolean = app.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
 
     private fun strings(a: JSONArray?): List<String> = (0 until (a?.length() ?: 0)).map { a!!.optString(it) }
 

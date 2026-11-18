@@ -8,7 +8,15 @@ internal object Rules {
     /** The plan's doses of [g] still open. */
     fun open(plan: Plan, st: State, g: Group): List<Dose> = plan.doses(g.group).filter { st.doses[it.key]?.state == "open" }
 
+    /** [g]'s rung: one per ignore, up to the plan's top (4, the mascot's own top face). */
     fun rung(plan: Plan, g: Group): Int = plan.rung(g.ignores)
+
+    /**
+     * [g]'s mascot line, by the rule the nag screen shares (`src/app/plan.ts` nagLineIndex): its first open dose's
+     * seed plus its ignores, on its rung. Under decision A each nag ends in at most one ignore, so the ignores number
+     * its nags; both sides hold them, so the notification, the bubble and the nag screen never disagree.
+     */
+    fun line(plan: Plan, st: State, g: Group): String = plan.line(rung(plan, g), open(plan, st, g).firstOrNull()?.lineSeed ?: 0, g.ignores)
 
     private fun event(st: State, key: String, kind: String, reason: String?, at: Long) = Event(++st.event, key, kind, reason, at)
 
@@ -35,6 +43,20 @@ internal object Rules {
             }
             if (open(plan, st, g).isEmpty()) g.state = "done" else if (g.state == "done") g.state = "upcoming"
         }
+    }
+
+    /** How long before its time a dose may be confirmed (the app's early window, `src/domain` EARLY_WINDOW_MS). */
+    const val EARLY_MS = 2 * 60 * 60_000L
+
+    /**
+     * The state lost (its file unreadable) but not the plan: the doses still more than [EARLY_MS] ahead go on, since
+     * none of them could have been confirmed yet. The ones before are left out, as she may have taken them, until the
+     * app's next plan, which a lost state always merges (its hash is unknown). The ladder of those ahead starts anew.
+     */
+    fun recover(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
+        val ahead = plan.doses.filter { WallClock.epoch(it.group, zone) > now + EARLY_MS }
+        for (d in ahead) st.doses.getOrPut(d.key) { DoseState(d.key) }
+        for (name in ahead.map { it.group }.toSet()) st.groups.getOrPut(name) { Group(name) }
     }
 
     /** Doses past their `miss` lapse; a group with nothing open is done. */

@@ -32,35 +32,8 @@ import java.util.TimeZone
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
-class EngineTest {
-    private val app = RuntimeEnvironment.getApplication()
-    private val zone = TimeZone.getDefault()
-    private val alarms get() = app.getSystemService(AlarmManager::class.java)
-    private val nm get() = app.getSystemService(NotificationManager::class.java)
-    private fun at(local: String) = LocalDateTime.parse(local).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-    private val pillA = NagFixtures.dose("a@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T20:00", "Pill A")
-    private fun group(at: String = "2026-11-18T08:00") = Store.state(app).groups.getValue(at)
+internal class EngineTest : EngineCase() {
     private fun posted(id: Int): Notification? = nm.activeNotifications.firstOrNull { it.id == id }?.notification
-
-    /** The engine's clock, which the receivers and the service read: the tests pass on any day. */
-    private var clock = 0L
-
-    @Before fun setUp() {
-        TimeZone.setDefault(TimeZone.getTimeZone("America/Sao_Paulo"))
-        ShadowAlarmManager.setCanScheduleExactAlarms(true)
-        NagFixtures.clear(app)
-        NagService.running = null
-        NagService.starting = false
-        clock = at("2026-11-18T07:00")
-        Engine.clock = { clock }
-    }
-
-    @After fun tearDown() {
-        TimeZone.setDefault(zone)
-        NagFixtures.clear(app)
-        Bubble.hide()
-        Engine.clock = System::currentTimeMillis
-    }
 
     @Test fun aPlanSetsOneAlarmClockAtItsFirstDoseAndThePlanSentAgainChangesNothing() {
         Engine.schedule(app, NagFixtures.plan(pillA, made = 1), at("2026-11-18T07:00"))
@@ -250,6 +223,7 @@ class EngineTest {
     @Test fun theRingPlaysTheSettingsAlarmSoundWhichSoundsBeforeTheFirstUnlock() {
         // Before the first unlock after a boot the sound's own file (content://media/…) cannot be read (measured on
         // Android 16: "setDataSource failed"); the settings' default URI plays from the device-protected cache.
+        android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.ALARM_ALERT, "content://media/internal/audio/media/7")
         org.robolectric.shadows.ShadowMediaPlayer.addMediaInfo(
             org.robolectric.shadows.util.DataSource.toDataSource(app, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI),
             org.robolectric.shadows.ShadowMediaPlayer.MediaInfo(10_000, 0))
@@ -265,12 +239,12 @@ class EngineTest {
         // new, the plan it holds still covers the week from then.
         Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
         Engine.resolve(app, listOf(pillA.getString("key")), "taken", null, at("2026-11-18T08:00"))
-        assertEquals(at("2026-11-25T07:00"), alarms.nextAlarmClock.triggerTime)
+        assertEquals("day 6, before the plan's seven days run out", at("2026-11-24T07:00"), alarms.nextAlarmClock.triggerTime)
         Engine.restore(app, at("2026-11-23T09:00"), front = true)
-        assertEquals(at("2026-11-30T09:00"), alarms.nextAlarmClock.triggerTime)
+        assertEquals(at("2026-11-29T09:00"), alarms.nextAlarmClock.triggerTime)
         // A boot is no opening.
         Engine.restore(app, at("2026-11-24T09:00"))
-        assertEquals(at("2026-11-30T09:00"), alarms.nextAlarmClock.triggerTime)
+        assertEquals(at("2026-11-29T09:00"), alarms.nextAlarmClock.triggerTime)
     }
 
     @Test fun aMalformedMascotPartNeverTakesThePlanDown() {
@@ -298,9 +272,9 @@ class EngineTest {
         assertNull(posted(Shade.PROMISE))
         Engine.restore(app, at("2026-11-18T08:02"))
         assertNull(posted(Shade.PROMISE))
-        // Resolved: nothing left to nag; the one alarm left is the stale notice's, a week after the last plan.
+        // Resolved: nothing left to nag; the one alarm left is the stale notice's, six days after the last plan.
         Engine.resolve(app, listOf(pillA.getString("key")), "taken", null, at("2026-11-18T08:03"))
-        assertEquals(at("2026-11-25T07:00"), alarms.nextAlarmClock.triggerTime)
+        assertEquals(at("2026-11-24T07:00"), alarms.nextAlarmClock.triggerTime)
     }
 
     @Test fun eventsWaitUntilTheAppAcknowledgesThemAndTheOldestGoBeyondAThousand() {
@@ -338,7 +312,8 @@ class EngineTest {
         val doses = Rules.doses(Store.plan(app)!!, Store.state(app))
         assertEquals("pending", doses.single().getString("state"))
         assertEquals(listOf("fired", "opened"), Store.events(app).map { it.kind })
-        assertEquals("1", Store.events(app).first().json().getString("id"))
+        val ids = Store.events(app).map { it.json().getString("id").toLong() }
+        assertTrue("unique and rising, from above any id a state before could have handed out", ids[0] > at("2026-11-18T07:00") && ids[1] == ids[0] + 1)
         assertTrue(JSONObject(Store.events(app).last().json().toString()).isNull("reason"))
     }
 }

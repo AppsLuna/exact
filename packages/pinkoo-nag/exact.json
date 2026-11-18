@@ -54,7 +54,8 @@
       "lines": "string[][]",
       "channelNag": "string",
       "channelPending": "string",
-      "channelNotice": "string"
+      "channelNotice": "string",
+      "channelRing": "string"
     },
     "NagStock": {
       "title": "string",

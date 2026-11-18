@@ -56,17 +56,21 @@ internal class State(
     var swiped: Int = 0,
     /** The promise deadline whose notification the person dismissed: not shown again for it. */
     var promiseDismissed: Long = 0,
+    /** The nag the person closed the bubble in: it stays closed until the next, across a process death (decision 5). */
+    var bubbleClosed: Int = 0,
+    /** Made anew, not read: there was no state file, or it could not be read. Not kept. */
+    val fresh: Boolean = false,
 ) {
     fun json(): JSONObject = JSONObject().put("v", 1)
         .put("groups", JSONArray(groups.values.map { it.json() })).put("doses", JSONArray(doses.values.map { it.json() }))
         .put("nag", nag).put("event", event).put("planHash", planHash).put("planAt", planAt).put("staleShown", staleShown)
-        .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed)
+        .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed).put("bubbleClosed", bubbleClosed)
 
     companion object {
         fun from(o: JSONObject): State {
             val s = State(nag = o.optInt("nag"), event = o.optLong("event"), planHash = o.optInt("planHash"), planAt = o.optLong("planAt"),
                 staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), swiped = o.optInt("swiped"),
-                promiseDismissed = o.optLong("promiseDismissed"))
+                promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"))
             o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) Group.from(a.getJSONObject(i)).let { s.groups[it.group] = it } }
             o.optJSONArray("doses")?.let { a -> for (i in 0 until a.length()) DoseState.from(a.getJSONObject(i)).let { s.doses[it.key] = it } }
             return s
@@ -103,7 +107,14 @@ internal object Store {
     @Synchronized fun plan(c: Context): Plan? = planText(c)?.let { runCatching { Plan.parse(JSONObject(it)) }.getOrNull() }
     @Synchronized fun savePlan(c: Context, text: String) = write(c, "plan.json", text)
 
-    @Synchronized fun state(c: Context): State = read(c, "state.json")?.let { runCatching { State.from(JSONObject(it)) }.getOrNull() } ?: State()
+    /**
+     * The state, or one made anew when there is none or it cannot be read. The app records each event once by its id
+     * (`nag_log`, `ON CONFLICT(id) DO NOTHING`), so a state made anew numbers its events above every id one before it
+     * could have handed out: from the wall clock in milliseconds (the engine records far fewer than one event a
+     * millisecond) and from the last id still waiting in the events file, whichever is higher.
+     */
+    @Synchronized fun state(c: Context): State = read(c, "state.json")?.let { runCatching { State.from(JSONObject(it)) }.getOrNull() }
+        ?: State(event = maxOf(Engine.clock(), events(c).maxOfOrNull { it.id } ?: 0L), fresh = true)
     @Synchronized fun save(c: Context, s: State) = write(c, "state.json", s.json().toString())
 
     @Synchronized fun events(c: Context): List<Event> {

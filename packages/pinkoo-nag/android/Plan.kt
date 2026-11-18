@@ -22,8 +22,11 @@ internal class Texts(private val o: JSONObject) {
     val title = s("title"); val body = s("body"); val publicTitle = s("publicTitle"); val publicBody = s("publicBody")
     val take = s("take"); val promise = s("promise"); val notNow = s("notNow"); val pending = s("pending")
     val promiseChip = s("promiseChip"); val bubble = s("bubble")
+    /** The channels' names in Android's settings: the loud nag the service rings, the waiting one, the notices, and the
+     * loud nag that sounds itself when no service can ring ([Shade.CH_RING]). */
     val channelNag = s("channelNag"); val channelPending = s("channelPending"); val channelNotice = s("channelNotice")
-    /** The mascot's lines, by rung, which rotate. */
+    val channelRing = s("channelRing")
+    /** The mascot's lines, by rung (0 to the top, 4), which rotate. */
     val lines: List<List<String>> = (0 until (o.optJSONArray("lines")?.length() ?: 0)).map { r ->
         val a = o.getJSONArray("lines").optJSONArray(r)
         (0 until (a?.length() ?: 0)).map { a!!.optString(it) }
@@ -32,7 +35,8 @@ internal class Texts(private val o: JSONObject) {
 
 internal class Stock(val title: String, val body: String)
 
-/** The notice when the app has not sent a plan for [afterDays] days: the plan holds that many days of nags. */
+/** The notice when the app has not been in front for [afterDays] days: the plan holds seven days of nags, and the
+ * notice comes the day before they run out (decision 5: day 6). */
 internal class Idle(val afterDays: Int, val title: String, val body: String)
 
 internal class Plan(
@@ -42,7 +46,8 @@ internal class Plan(
     /** The app's route for a group's nag. */
     val route = "/nag/{group}"
 
-    /** The rung [ignores] ignores reach: the last whose threshold they meet. */
+    /** The rung [ignores] ignores reach: the last whose threshold they meet. The app's plan has one per ignore, 0 to 4,
+     * the mascot's top (`src/app/plan.ts` nagRung): the nag screen shows the same. */
     fun rung(ignores: Int): Int = rungs.indexOfLast { it.ignores <= ignores }.coerceAtLeast(0)
 
     /** Every nuisance a group at [rung] has: its rung's and every rung's below. */
@@ -54,10 +59,11 @@ internal class Plan(
 
     fun volume(rung: Int): Double = volume.getOrNull(rung) ?: volume.lastOrNull() ?: 1.0
 
-    /** The mascot's line at [rung] for a nag: `lines[rung][(seed + turn) mod count]`, the top rung's for any above. */
-    fun line(rung: Int, seed: Long, turn: Int): String {
+    /** The mascot's line at [rung] for a nag: `lines[rung][(seed + ignores) mod count]`, the top rung's for any above.
+     * The nag screen picks the same (`src/app/plan.ts` nagLineIndex, `mascotNagLine`). */
+    fun line(rung: Int, seed: Long, ignores: Int): String {
         val lines = texts.lines.getOrNull(rung) ?: texts.lines.lastOrNull() ?: return ""
-        return if (lines.isEmpty()) "" else lines[Math.floorMod(seed + turn, lines.size.toLong()).toInt()]
+        return if (lines.isEmpty()) "" else lines[Math.floorMod(seed + ignores, lines.size.toLong()).toInt()]
     }
 
     /** The mascot at [rung], its face for that rung; rung 0's for any the plan has no drawing for. */
@@ -78,7 +84,7 @@ internal class Plan(
                     if (d.isNull("promiseUntil")) null else d.optLong("promiseUntil"), d.optLong("lineSeed"))
             }.filter { it.key.isNotEmpty() && WallClock.valid(it.group) && WallClock.valid(it.miss) }
             val stock = o.optJSONObject("stock")?.let { Stock(it.optString("title"), it.optString("body")) }
-            val idle = o.optJSONObject("idle").let { Idle(it?.optInt("afterDays", 7)?.coerceIn(1, 366) ?: 7, it?.optString("title") ?: "", it?.optString("body") ?: "") }
+            val idle = o.optJSONObject("idle").let { Idle(it?.optInt("afterDays", 6)?.coerceIn(1, 366) ?: 6, it?.optString("title") ?: "", it?.optString("body") ?: "") }
             val mascots = whole(o.opt("mascots")).let { m -> if (m is JSONArray) objects(m).map(Mascot::parse) else emptyList() }
             return Plan(o.optLong("made"), ladder, rungs.ifEmpty { listOf(Rung(0, listOf("ring", "fullScreen"))) },
                 o.optBoolean("liveUpdate", true), volume, doses, Texts(o.optJSONObject("texts") ?: JSONObject()),
