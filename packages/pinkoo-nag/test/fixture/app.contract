@@ -29,6 +29,11 @@ component Fixture
     send planned = planNags(time.epochAtZero + performanceNow(), 60, 1, 1, 20)
   action planSoon
     send planned = planNags(time.epochAtZero + performanceNow(), 1, 1, 1, 20)
+  // The drive's --fast mode: the same 1/1-minute ladder with a 10-second ring, the first dose sooner.
+  action planFast
+    send planned = planNags(time.epochAtZero + performanceNow(), 30, 1, 1, 10)
+  action soonFast
+    send planned = planNags(time.epochAtZero + performanceNow(), 1, 1, 1, 10)
   action planIdle
     send planned = planIdle(time.epochAtZero + performanceNow())
   // Every nuisance from the first nag: the bubble and the unlock without climbing.
@@ -54,6 +59,10 @@ component Fixture
                 text "Soon"
               button press=planIdle testId="idle"
                 text "Idle"
+              button press=planFast testId="plan-fast"
+                text "Plan fast"
+              button press=soonFast testId="soon-fast"
+                text "Soon fast"
               button press=planAll testId="all"
                 text "All"
               button press=act("taken") testId="take"

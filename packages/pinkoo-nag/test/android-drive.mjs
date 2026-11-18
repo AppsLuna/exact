@@ -26,11 +26,19 @@
 //     module is made after that resume), and a pause and a resume post nothing again.
 //
 // The emulator is left as found: the fixture uninstalled, the ringer normal, no PIN, the battery and Doze reset.
+//
+// For iterating only (android.mjs's `--only` and `--fast`): `only` runs the listed steps, where 1 is steps 1 to 7
+// (they build on each other) and 8 to 12 stand alone; `fast` keeps the 1/1-minute ladder but rings 10 seconds instead
+// of 20 (the buttons "Plan fast" and "Soon fast"), plans step 1's dose 30 to 90 s out instead of 60 to 120, and holds
+// forced Doze one minute instead of five. Neither replaces the whole drive with the fixture's own timings: work that
+// touches the engine is finished only after `android.mjs --emulator <serial>` with neither flag passes.
 import { resolve } from 'node:path';
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
-export async function drive({ root, apk, id, emulator, check, run, out, only = null }) {
+export async function drive({ root, apk, id, emulator, check, run, out, only = null, fast = false }) {
+  // The fixture's buttons: its own timings, or the fast ones.
+  const PLAN = fast ? 'Plan fast' : 'Plan', SOON = fast ? 'Soon fast' : 'Soon';
   const adb = (...a) => run('adb', ['-s', emulator, ...a], root, process.env, true);
   const sh = (cmd) => adb('shell', cmd);
   const sdk = Number(sh('getprop ro.build.version.sdk').trim());
@@ -159,7 +167,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   try {
     if (step(1)) {
       // 1. Killed, silent, asleep, locked with a PIN: the full-screen nag over the keyguard, the alarm stream playing.
-      const group = await plan('Plan');
+      const group = await plan(PLAN);
       const a = armed();
       check('android', 'the plan sets one alarm clock at the dose', !!a?.clock && !!group, a?.block ?? alarm().slice(0, 400));
       save('dumpsys-alarm-plan.txt', a?.block ?? '');
@@ -299,7 +307,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     if (step(8)) {
       // 8. A reboot mid-ladder, locked with a PIN: the next nag is set again at boot and rings before the first unlock.
       launch();
-      const group = await plan('Soon');
+      const group = await plan(SOON);
       home();
       await wait(Math.max(0, msTo(minuteOf(group), 3000)));
       await until(() => playing(), 20000, 1000);
@@ -340,7 +348,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     if (step(9)) {
       // 9. A force-stop drops every alarm: nothing rings until the app is launched, then the overdue nag rings at once.
       launch();
-      const group = await plan('Soon');
+      const group = await plan(SOON);
       home();
       sh(`am force-stop ${id}`);
       check('android', 'force-stopped: no alarm left', await until(() => !armed(), 5000), armed()?.block);
@@ -366,7 +374,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       sh('dumpsys battery unplug');
       sh('input keyevent KEYCODE_SLEEP');
       sh('dumpsys deviceidle force-idle deep');
-      await wait(5 * 60_000);
+      await wait((fast ? 1 : 5) * 60_000);
       const stats = sh(`dumpsys batterystats ${id}`);
       save('10-batterystats.txt', stats);
       sh('dumpsys deviceidle unforce');
@@ -387,7 +395,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       launch();
       check('android', 'no exact alarms', !!(await until(() => find(/exact=false/), 15000, 700)), find(/exact=/)?.text);
       adb('logcat', '-c');
-      const group = await plan('Soon');
+      const group = await plan(SOON);
       home();
       // An inexact alarm comes within its window, about a minute here.
       const shown = await until(() => nagShown(), msTo(minuteOf(group), 150_000), 2000);
@@ -411,7 +419,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     if (step(12)) {
       // 12. Every loud nag is a new notification, so each launches its full-screen nag (an update launches none).
       launch();
-      const group = await plan('Soon');
+      const group = await plan(SOON);
       home();
       sh('locksettings set-pin 1234');
       pinSet = true;

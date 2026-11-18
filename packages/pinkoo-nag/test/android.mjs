@@ -6,10 +6,16 @@
 // With `--emulator <serial>` it then installs the APK on that running emulator and drives it as a person would, with
 // real launches, `uiautomator` and `adb` (android-drive.mjs). What needs a phone is checklist.md's.
 //
-// usage: bun packages/pinkoo-nag/test/android.mjs [--emulator <serial>] [--out <dir>] [--keep <dir>] [--steps 1,12]
+// usage: bun packages/pinkoo-nag/test/android.mjs [--emulator <serial>] [--out <dir>] [--keep <dir>] [--only 1,12]
+//          [--fast]
 //   (ANDROID_HOME, an NDK of clang 18 or newer, and a JDK 17 or newer in JAVA_HOME; `--keep` builds in <dir> and
-//   leaves it, so a second run is warm; `--steps` drives only those steps of android-drive.mjs, for iterating: the
-//   whole drive still runs before a change is done)
+//   leaves it, so a second run is warm)
+//   --only 1,12  drives only those steps of android-drive.mjs (1 runs steps 1 to 7, which build on each other);
+//                `--steps` is the same flag
+//   --fast       the fixture's 1/1-minute ladder with a 10-second ring instead of 20, step 1's dose sooner and one
+//                minute of forced Doze instead of five: about 12 minutes of driving instead of 18
+//   Both are for iterating only. Work that touches the engine is finished only after a whole run with the fixture's
+//   own timings passes: `--emulator <serial>` with neither flag.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,7 +28,8 @@ import { androidPackageId } from '../../../scripts/app.mjs';
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const argv = process.argv.slice(2), flag = (f) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : null);
 const emulator = flag('--emulator'), out = flag('--out'), keep = flag('--keep');
-const only = flag('--steps')?.split(',').map(Number).filter((n) => n > 0) ?? null;
+const only = (flag('--only') ?? flag('--steps'))?.split(',').map(Number).filter((n) => n > 0) ?? null;
+const fast = argv.includes('--fast');
 const run = (cmd, args, cwd, env = process.env, ok = false) => {
   const r = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 28 });
   if (r.status !== 0 && !ok) throw new Error(`${cmd} ${args.join(' ')}: ${r.stdout.slice(-4000)}\n${r.stderr.slice(-4000)}`);
@@ -75,7 +82,7 @@ try {
     if (out) mkdirSync(out, { recursive: true });
     // The drive speaks to adb, which knows the Android package (the app's id with `-` as `_`), not the app's id.
     const packageId = androidPackageId(JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')));
-    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id: packageId, emulator, check, run, out, only }));
+    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id: packageId, emulator, check, run, out, only, fast }));
   }
 } finally {
   if (!keep) rmSync(dir, { recursive: true, force: true });
