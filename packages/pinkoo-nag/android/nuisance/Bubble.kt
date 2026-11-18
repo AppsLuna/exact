@@ -107,7 +107,7 @@ internal object Bubble : Nuisance {
         val live = last ?: return
         closedNag = live.nag
         hide()
-        Engine.ignore(c, live.nag, "bubble", System.currentTimeMillis())
+        Engine.ignore(c, live.nag, "bubble")
     }
 
     @SuppressLint("ViewConstructor")

@@ -63,7 +63,8 @@ internal class Mascot(val box: FloatArray, val parts: List<Part>) {
             val vb = o.optJSONArray("viewBox")
             val box = FloatArray(4) { i -> (vb?.optDouble(i, if (i < 2) 0.0 else 200.0) ?: (if (i < 2) 0.0 else 200.0)).toFloat() }
             val a = o.optJSONArray("parts")
-            return Mascot(box, (0 until (a?.length() ?: 0)).mapNotNull { a!!.optJSONObject(it)?.let(Part::parse) })
+            // A part that cannot be read is left out, never the mascot or the plan.
+            return Mascot(box, (0 until (a?.length() ?: 0)).mapNotNull { i -> a!!.optJSONObject(i)?.let { runCatching { Part.parse(it) }.getOrNull() } })
         }
     }
 }
@@ -141,12 +142,13 @@ internal object Colors {
 }
 
 /** An SVG transform list of `translate`, `rotate` (with an optional centre) and `scale`, applied right to left as SVG
- * applies them. */
+ * applies them. A step with a value that is not a number is left out. */
 internal object Transforms {
     fun parse(s: String): Matrix {
         val m = Matrix()
         for (match in Regex("""(translate|rotate|scale)\s*\(([^)]*)\)""").findAll(s)) {
-            val a = match.groupValues[2].split(Regex("""[\s,]+""")).filter { it.isNotEmpty() }.map { it.toFloat() }
+            val a = match.groupValues[2].split(Regex("""[\s,]+""")).filter { it.isNotEmpty() }.map { it.toFloatOrNull() ?: Float.NaN }
+            if (a.any { !it.isFinite() }) continue
             val step = Matrix()
             when (match.groupValues[1]) {
                 "translate" -> step.setTranslate(a.getOrElse(0) { 0f }, a.getOrElse(1) { 0f })

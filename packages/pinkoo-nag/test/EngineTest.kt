@@ -22,6 +22,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowAlarmManager
+import org.robolectric.shadows.ShadowPowerManager
 import org.robolectric.shadows.ShadowSettings
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -41,17 +42,24 @@ class EngineTest {
     private fun group(at: String = "2026-11-18T08:00") = Store.state(app).groups.getValue(at)
     private fun posted(id: Int): Notification? = nm.activeNotifications.firstOrNull { it.id == id }?.notification
 
+    /** The engine's clock, which the receivers and the service read: the tests pass on any day. */
+    private var clock = 0L
+
     @Before fun setUp() {
         TimeZone.setDefault(TimeZone.getTimeZone("America/Sao_Paulo"))
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
         NagFixtures.clear(app)
         NagService.running = null
+        NagService.starting = false
+        clock = at("2026-11-18T07:00")
+        Engine.clock = { clock }
     }
 
     @After fun tearDown() {
         TimeZone.setDefault(zone)
         NagFixtures.clear(app)
         Bubble.hide()
+        Engine.clock = System::currentTimeMillis
     }
 
     @Test fun aPlanSetsOneAlarmClockAtItsFirstDoseAndThePlanSentAgainChangesNothing() {
@@ -94,7 +102,7 @@ class EngineTest {
             assertEquals(Notification.VISIBILITY_PRIVATE, n.visibility)
             assertEquals("the lock screen shows no name", "Reminder", n.publicVersion.extras.getString(Notification.EXTRA_TITLE))
             assertEquals(FullScreen.allowed(app), n.fullScreenIntent != null)
-            assertEquals(at("2026-11-18T08:21"), alarms.nextAlarmClock.triggerTime)
+            assertEquals("the alarm is the ring's end", at("2026-11-18T08:01"), alarms.nextAlarmClock.triggerTime)
             // "Not now" from the shade: the ring ends as an ignore, the notification stays, silent, and the next nag is
             // counted from it.
             NagReceiver().onReceive(app, Intent(NagReceiver.NOT_NOW).putExtra("nag", group().nag))
@@ -167,13 +175,113 @@ class EngineTest {
         assertEquals(12 * 3_600_000L, LocalDateTime.parse("2026-11-18T08:00").atZone(ZoneId.of("America/Sao_Paulo")).toInstant().toEpochMilli() - alarms.nextAlarmClock.triggerTime)
     }
 
-    @Test fun aRingTheProcessLostWaitsAndNagsAgainOnTimeAfterABoot() {
+    @Test fun aRingTheProcessLostTimesOutAtItsRingEndAsTheAppCountsItAndNagsAgainOnTime() {
         Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
         Engine.fire(app, at("2026-11-18T08:00"))
         NagService.running = null
+        clock = at("2026-11-18T08:05")
         NagSystemReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
         assertEquals("pending", group().state)
+        assertEquals("the ring that ended unanswered is the nag's one ignore, as the app's catch-up counts it", 1, group().ignores)
+        val ignored = Store.events(app).last()
+        assertEquals("timeout", ignored.reason)
+        assertEquals(at("2026-11-18T08:01"), ignored.at)
         assertEquals(at("2026-11-18T08:21"), alarms.nextAlarmClock.triggerTime)
+    }
+
+    @Test fun aRingNoServiceRanEndsAtItsRingTimeAsTheNagsOneIgnore() {
+        // The system refused the service (no exact-alarm access: an inexact alarm gives no start from the background,
+        // measured on Android 16): the loud nag is posted, but nothing times it out but the alarm.
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        Engine.fire(app, at("2026-11-18T08:00"))
+        assertNull(NagService.running)
+        assertEquals("the alarm is the ring's end", at("2026-11-18T08:01"), alarms.nextAlarmClock.triggerTime)
+        Engine.fire(app, at("2026-11-18T08:01"))
+        assertEquals("pending", group().state)
+        assertEquals(1, group().ignores)
+        assertEquals(listOf("fired", "ignored"), Store.events(app).map { it.kind })
+        assertEquals(Shade.CH_WAITING, posted(Shade.NAG)?.channelId)
+        assertEquals(at("2026-11-18T08:21"), alarms.nextAlarmClock.triggerTime)
+        // The next nag climbs a rung, and so on.
+        Engine.fire(app, at("2026-11-18T08:21"))
+        Engine.fire(app, at("2026-11-18T08:22"))
+        assertEquals(2, group().ignores)
+        assertEquals(at("2026-11-18T08:37"), alarms.nextAlarmClock.triggerTime)
+    }
+
+    @Test fun theServicesOwnTimerEndsTheRingAtTheRingsEnd() {
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        Engine.fire(app, at("2026-11-18T08:00"))
+        val started = shadowOf(app).nextStartedService
+        val service = Robolectric.buildService(NagService::class.java, started).create()
+        try {
+            clock = at("2026-11-18T08:00") + 400
+            service.get().onStartCommand(started, 0, 1)
+            clock = at("2026-11-18T08:01")
+            shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(60))
+            assertEquals(1, group().ignores)
+            assertEquals("at the ring's end, not a start's delay later", at("2026-11-18T08:01"), Store.events(app).last().at)
+        } finally { service.destroy() }
+    }
+
+    @Test fun aDoseMutedWhileNotificationsWereOffNagsOnceTheyAreBackAndTheAppIsOpened() {
+        shadowOf(nm).setNotificationsEnabled(false)
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        Engine.fire(app, at("2026-11-18T08:00"))
+        assertEquals("pending", group().state)
+        shadowOf(nm).setNotificationsEnabled(true)
+        // She turns them on and opens the app: the module is made, and the dose nags at once.
+        Engine.restore(app, at("2026-11-18T08:30"))
+        assertEquals(at("2026-11-18T08:30"), alarms.nextAlarmClock.triggerTime)
+        Engine.fire(app, at("2026-11-18T08:30"))
+        assertEquals("ringing", group().state)
+    }
+
+    @Test fun aFireThatStartsNoServiceLetsGoOfItsWakeLock() {
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        clock = at("2026-11-18T07:30")
+        NagReceiver().onReceive(app, Intent(NagReceiver.FIRE))
+        assertFalse("nothing was due: no service will release it", ShadowPowerManager.getLatestWakeLock().isHeld)
+        clock = at("2026-11-18T08:00")
+        NagReceiver().onReceive(app, Intent(NagReceiver.FIRE))
+        assertTrue("held until the service it started has started", ShadowPowerManager.getLatestWakeLock().isHeld)
+    }
+
+    @Test fun theRingPlaysTheSettingsAlarmSoundWhichSoundsBeforeTheFirstUnlock() {
+        // Before the first unlock after a boot the sound's own file (content://media/…) cannot be read (measured on
+        // Android 16: "setDataSource failed"); the settings' default URI plays from the device-protected cache.
+        org.robolectric.shadows.ShadowMediaPlayer.addMediaInfo(
+            org.robolectric.shadows.util.DataSource.toDataSource(app, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI),
+            org.robolectric.shadows.ShadowMediaPlayer.MediaInfo(10_000, 0))
+        val p = NagService.player(app, 0.6)!!
+        try {
+            assertEquals(org.robolectric.shadows.util.DataSource.toDataSource(app, android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI), shadowOf(p).dataSource)
+            assertTrue(p.isPlaying)
+        } finally { p.release() }
+    }
+
+    @Test fun theStaleNoticeCountsFromTheLastTimeTheAppWasInFront() {
+        // The app sends its plan only when it changed (src/app/actions.ts appOpened): opened on day 5 with nothing
+        // new, the plan it holds still covers the week from then.
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        Engine.resolve(app, listOf(pillA.getString("key")), "taken", null, at("2026-11-18T08:00"))
+        assertEquals(at("2026-11-25T07:00"), alarms.nextAlarmClock.triggerTime)
+        Engine.restore(app, at("2026-11-23T09:00"), front = true)
+        assertEquals(at("2026-11-30T09:00"), alarms.nextAlarmClock.triggerTime)
+        // A boot is no opening.
+        Engine.restore(app, at("2026-11-24T09:00"))
+        assertEquals(at("2026-11-30T09:00"), alarms.nextAlarmClock.triggerTime)
+    }
+
+    @Test fun aMalformedMascotPartNeverTakesThePlanDown() {
+        val o = NagFixtures.plan(pillA)
+        o.getJSONObject("mascot").put("parts", JSONArray()
+            .put(JSONObject().put("t", "circle").put("cx", 10).put("cy", 10).put("r", 5).put("fill", "#FF7A59"))
+            .put(JSONObject().put("t", "circle").put("r", 5).put("fill", "#FF7A59").put("tf", "rotate(10deg) scale(x)")))
+        Engine.schedule(app, o, at("2026-11-18T07:00"))
+        assertNotNull("the plan is kept", Store.plan(app))
+        assertEquals(2, Store.plan(app)!!.mascot(0)!!.parts.size)
+        assertEquals(at("2026-11-18T08:00"), alarms.nextAlarmClock.triggerTime)
     }
 
     @Test fun aPromiseCountsDownAndOnceDismissedIsNotShownAgain() {

@@ -14,10 +14,8 @@ import android.app.NotificationManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -54,8 +52,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             "nagState" -> reply(state())
             "scheduleNags" -> {
                 val plan = args.optJSONObject("plan") ?: return reply(JSONObject().put("error", "TypeError"))
-                Engine.schedule(app, plan)
-                reply(JSONObject())
+                // A plan that cannot be read is refused; the engine keeps nagging from the last one.
+                reply(if (Engine.schedule(app, plan)) JSONObject() else JSONObject().put("error", "TypeError"))
             }
             "resolveNags" -> {
                 val kind = args.optString("kind")
@@ -77,13 +75,14 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** The bubble hides while the app's activity is resumed and comes back when it pauses. */
+    /** The bubble hides while the app's activity is resumed and comes back when it pauses. Back in front, everything is
+     * set again: notifications turned back on in Settings meanwhile bring back the doses they silenced. */
     override fun resumed() = front(true)
     override fun paused() = front(false)
 
     private fun front(shown: Boolean) {
         Bubble.appInFront = shown
-        if (!context.agent) Engine.live(app)?.let { Engine.refresh(app, it.plan, it.st) }
+        if (!context.agent) Engine.restore(app, front = shown)
     }
 
     /** The person may have changed a switch in Settings meanwhile. */
@@ -169,17 +168,7 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private fun preview(rung: Int) {
         preview?.runCatching { stop(); release() }
         val volume = Store.plan(app)?.volume(rung) ?: 1.0
-        val uri = RingtoneManager.getActualDefaultRingtoneUri(app, RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        preview = runCatching {
-            MediaPlayer().apply {
-                setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-                setDataSource(app, uri)
-                isLooping = true
-                setVolume(volume.toFloat(), volume.toFloat())
-                prepare()
-                start()
-            }
-        }.getOrNull()
+        preview = NagService.player(app, volume)
         app.getSystemService(Vibrator::class.java)?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 500), 0))
         Handler(Looper.getMainLooper()).postDelayed({
             preview?.runCatching { stop(); release() }

@@ -47,7 +47,7 @@ internal class State(
     var event: Long = 0,
     /** The plan's text the state was merged from, which a plan sent again unchanged skips. */
     var planHash: Int = 0,
-    /** When the app last sent a plan: the stale notice comes the plan's idle days after it. */
+    /** When the app last sent a plan or came to the front: the stale notice comes the plan's idle days after it. */
     var planAt: Long = 0,
     var staleShown: Long = 0,
     /** The local date the low-stock notice was last posted on. */
@@ -121,11 +121,12 @@ internal object Store {
         if (all.size > EVENTS) rewrite(c, all.takeLast(EVENTS))
     }
 
-    /** Drops the events up to [through], which the app has recorded. */
-    @Synchronized fun ack(c: Context, through: Long) {
+    /** Drops the events up to [through], which the app has recorded; whether it dropped any. */
+    @Synchronized fun ack(c: Context, through: Long): Boolean {
         val all = events(c)
         val kept = all.filter { it.id > through }
         if (kept.size != all.size) rewrite(c, kept)
+        return kept.size != all.size
     }
 
     private fun rewrite(c: Context, events: List<Event>) = write(c, "events.jsonl", events.joinToString("") { it.json().toString() + "\n" })

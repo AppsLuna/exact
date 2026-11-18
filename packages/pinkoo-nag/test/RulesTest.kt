@@ -112,9 +112,39 @@ class RulesTest {
         assertEquals("pending", g.state)
         assertEquals(0, g.ignores)
         assertEquals("opened", ev.last().kind)
+        assertEquals("the next nag counts from the opening, as the app's ladder does", at("2026-11-18T08:20") + 20_000, Rules.next(p, st, sp))
         // Left without resolving, the swipe that follows is the nag's ignore.
         assertTrue(Rules.ignore(p, st, nag, "swipe", at("2026-11-18T08:05"), ev))
         assertEquals(at("2026-11-18T08:25"), Rules.next(p, st, sp))
+    }
+
+    @Test fun aRingEndsAtItsRingTimeAsTheIgnoreOfWhatStillRingsAlone() {
+        val other = NagFixtures.dose("b@2026-11-18T07:59", "2026-11-18T07:59", "2026-11-18T20:00", "Pill B")
+        val p = plan(pillA, other)
+        val st = State()
+        Rules.merge(p, st, 0)
+        val ev = ArrayList<Event>()
+        Rules.fire(p, st, Rules.due(p, st, at("2026-11-18T08:00"), sp), at("2026-11-18T08:00"), ev)
+        assertEquals("the alarm is the ring's end", at("2026-11-18T08:01"), Rules.next(p, st, sp))
+        // One of the two groups the nag rang for was opened: only the other one rings out.
+        Rules.opened(p, st, listOf("b@2026-11-18T07:59"), at("2026-11-18T08:00") + 10_000, ev)
+        Rules.ringOut(p, st, at("2026-11-18T08:00") + 59_999, ev)
+        assertEquals(0, st.groups.getValue("2026-11-18T08:00").ignores)
+        Rules.ringOut(p, st, at("2026-11-18T08:03"), ev)
+        assertEquals(1, st.groups.getValue("2026-11-18T08:00").ignores)
+        assertEquals(0, st.groups.getValue("2026-11-18T07:59").ignores)
+        assertEquals(at("2026-11-18T08:21"), st.groups.getValue("2026-11-18T08:00").nextAt)
+        assertEquals("timeout", ev.last().reason)
+        assertEquals(at("2026-11-18T08:01"), ev.last().at)
+        Rules.ringOut(p, st, at("2026-11-18T08:04"), ev)
+        assertEquals("once", 1, st.groups.getValue("2026-11-18T08:00").ignores)
+    }
+
+    @Test fun theStaleNoticeOfAHugeIdleSpanIsStillAhead() {
+        val o = NagFixtures.plan(pillA)
+        o.getJSONObject("idle").put("afterDays", 1_500_000)
+        val st = State(planAt = at("2026-11-18T07:00"))
+        assertTrue(Rules.stale(Plan.parse(o), st)!! > st.planAt)
     }
 
     @Test fun aPromiseMovesTheNextNagToItsDeadlineCappedAtTheMiss() {

@@ -1,7 +1,8 @@
 // The engine's one foreground service. It rings while a nag rings (the alarm sound on the alarm stream at the rung's
 // share of the person's alarm volume, never changing it, and a vibration that lengthens with the rung) and ends that
-// ring after the ladder's ring time as an ignore. It also keeps the process while a nuisance needs one, the bubble or
-// opening at unlock. Its notification is the nag notification, so there is never a second one.
+// ring at its ring's end as an ignore (`Rules.ringOut`; the alarm is set then too, and whichever comes first counts
+// it). It also keeps the process while a nuisance needs one, the bubble or opening at unlock. Its notification is the
+// nag notification, so there is never a second one.
 //
 // One service with both types, rather than one per job: it starts at the alarm, under the exact alarm's exemption
 // from Android's background start limits, as `systemExempted` (an exact-alarm holder's; the ring) and `specialUse`
@@ -26,24 +27,65 @@ import android.os.PowerManager
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.Settings
 
 class NagService : Service() {
     companion object {
         @Volatile internal var running: NagService? = null
         /** The alarm receiver's wake lock, released once the service has started. */
         @Volatile internal var waking: PowerManager.WakeLock? = null
+        /** A start is on its way: the wake lock waits for it. */
+        @Volatile internal var starting = false
+
+        /** The alarm receiver's wake lock let go: the service started, or none will. */
+        internal fun release() {
+            waking?.let { if (it.isHeld) it.release() }
+            waking = null
+        }
+
+        /** Whether [live] needs the service: something rings, or a holding nuisance is on. */
+        internal fun needed(c: Context, live: Live): Boolean =
+            live.ringing.isNotEmpty() || (live.groups.isNotEmpty() && Nuisances.holding(c, live))
 
         /**
          * The service brought to [live]: started when something rings or a holding nuisance is on, told otherwise.
          * Returns whether it shows the nag notification, which the engine then leaves to it.
          */
         internal fun sync(c: Context, live: Live): Boolean {
-            val need = live.ringing.isNotEmpty() || (live.groups.isNotEmpty() && Nuisances.holding(c, live))
+            val need = needed(c, live)
             val s = running
             if (s != null) { if (need) s.update(live) else s.finish(live); return need }
             if (!need) return false
-            return runCatching { c.startForegroundService(Intent(c, NagService::class.java)); true }
+            return runCatching { c.startForegroundService(Intent(c, NagService::class.java)); starting = true; true }
                 .onFailure { android.util.Log.w("pinkoo.nag", "service: $it") }.getOrDefault(false)
+        }
+
+        /**
+         * The person's alarm sound on the alarm stream, which Do Not Disturb lets through by default, looping at [volume]
+         * of the stream's level (`MediaPlayer.setVolume` scales this player alone). The settings' default URIs come
+         * first: `MediaPlayer` plays them from the ringtone cache in device-protected storage, so the ring sounds before
+         * the first unlock after a boot, when the sound's own file (`content://media/…`) cannot be read. Then the
+         * sound itself, the ringtone and the notification sound, should the alarm sound be none.
+         */
+        internal fun player(c: Context, volume: Double): MediaPlayer? {
+            val uris = listOfNotNull(Settings.System.DEFAULT_ALARM_ALERT_URI, RingtoneManager.getActualDefaultRingtoneUri(c, RingtoneManager.TYPE_ALARM),
+                Settings.System.DEFAULT_RINGTONE_URI, Settings.System.DEFAULT_NOTIFICATION_URI).distinct()
+            for (uri in uris) {
+                val p = MediaPlayer()
+                try {
+                    p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                    p.setDataSource(c, uri)
+                    p.isLooping = true
+                    p.setVolume(volume.toFloat(), volume.toFloat())
+                    p.prepare()
+                    p.start()
+                    return p
+                } catch (e: Exception) {
+                    android.util.Log.w("pinkoo.nag", "ring: $uri: $e")
+                    p.release()
+                }
+            }
+            return null
         }
 
         /** The vibration at [rung]: longer pulses, shorter pauses as it climbs. */
@@ -58,7 +100,9 @@ class NagService : Service() {
     private var player: MediaPlayer? = null
     private var playing = -1.0
     private var vibrating = -1
-    private val timeouts = HashMap<Int, Runnable>()
+    /** The earliest ring's end it times, and its timer. */
+    private var ringEndAt = 0L
+    private val ringEnd = Runnable { val at = ringEndAt; ringEndAt = 0; Engine.ringOut(this, at) }
     private var foreground = false
     /** The latest start delivered: stopping with it ends the service only when no newer start is on its way. */
     private var lastStart = 0
@@ -68,14 +112,15 @@ class NagService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         running = this
         lastStart = startId
-        val live = Engine.live(this)
-        // A service started with startForegroundService must enter the foreground, or the system ends the app.
-        if (live == null || live.groups.isEmpty()) {
-            enter(Notification.Builder(this, Shade.CH_WAITING).setSmallIcon(Shade.icon(this)).build())
-            finish(live)
-        } else update(live)
-        waking?.let { if (it.isHeld) it.release() }
-        waking = null
+        starting = false
+        val live = runCatching { Engine.live(this) }.getOrNull()
+        // A service started with startForegroundService must enter the foreground, or the system ends the app; and it
+        // stops at once when nothing needs it any more (resolved, opened or ignored before it started).
+        val shown = live != null && live.groups.isNotEmpty() &&
+            runCatching { update(live); true }.onFailure { android.util.Log.e("pinkoo.nag", "service", it) }.getOrDefault(false)
+        if (!shown) enter(Notification.Builder(this, Shade.CH_WAITING).setSmallIcon(Shade.icon(this)).build())
+        if (live == null || !shown || !needed(this, live)) finish(live)
+        release()
         return START_NOT_STICKY
     }
 
@@ -88,10 +133,12 @@ class NagService : Service() {
         foreground = true
     }
 
+    /** The notification, the ring and the nuisances brought to [live]; a nuisance that fails stops neither the ring nor
+     * the others. */
     internal fun update(live: Live) {
         enter(Shade.nag(this, live, loud = live.ringing.isNotEmpty()))
-        ring(live)
-        Nuisances.apply(this, live)
+        runCatching { ring(live) }.onFailure { android.util.Log.e("pinkoo.nag", "ring", it) }
+        runCatching { Nuisances.apply(this, live) }.onFailure { android.util.Log.e("pinkoo.nag", "nuisances", it) }
     }
 
     /** Nothing rings and nothing needs the process: the ring stops, the nag notification stays while something waits. */
@@ -116,30 +163,18 @@ class NagService : Service() {
         if (player == null) play(volume) else if (volume != playing) player?.setVolume(volume.toFloat(), volume.toFloat())
         playing = volume
         if (vibrating != live.ringingRung) vibrate(live.ringingRung)
-        // Each nag ends unanswered after the ring time, once.
-        for (nag in live.ringing.map { it.nag }.distinct()) if (nag !in timeouts) {
-            val end = Runnable { timeouts.remove(nag); Engine.ignore(this, nag, "timeout", System.currentTimeMillis()) }
-            timeouts[nag] = end
-            main.postDelayed(end, live.plan.ladder.ringSec * 1000L)
+        // Each ring ends unanswered at its ring's end, on the uptime clock, which no change of the wall clock moves.
+        val end = live.ringing.mapNotNull { Rules.ringEnd(live.plan, it) }.minOrNull() ?: return
+        if (end != ringEndAt) {
+            main.removeCallbacks(ringEnd)
+            ringEndAt = end
+            main.postDelayed(ringEnd, (end - Engine.clock()).coerceIn(0, live.plan.ladder.ringSec * 1000L))
         }
-        for (nag in timeouts.keys.toList()) if (live.ringing.none { it.nag == nag }) main.removeCallbacks(timeouts.remove(nag)!!)
     }
 
-    /** The person's alarm sound on the alarm stream, which Do Not Disturb lets through by default, at [volume] of the
-     * stream's level (`MediaPlayer.setVolume` scales this player alone). */
     private fun play(volume: Double) {
-        val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-        player = runCatching {
-            MediaPlayer().apply {
-                setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-                setDataSource(this@NagService, uri)
-                isLooping = true
-                setVolume(volume.toFloat(), volume.toFloat())
-                prepare()
-                start()
-            }
-        }.onFailure { android.util.Log.w("pinkoo.nag", "ring: no alarm sound: $it") }.getOrNull()
+        player = player(this, volume)
+        if (player == null) android.util.Log.w("pinkoo.nag", "ring: no alarm sound")
     }
 
     private fun vibrate(rung: Int) {
@@ -156,8 +191,8 @@ class NagService : Service() {
         playing = -1.0
         if (vibrating >= 0) getSystemService(Vibrator::class.java)?.cancel()
         vibrating = -1
-        for (r in timeouts.values) main.removeCallbacks(r)
-        timeouts.clear()
+        main.removeCallbacks(ringEnd)
+        ringEndAt = 0
     }
 
     override fun onDestroy() {

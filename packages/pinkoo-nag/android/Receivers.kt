@@ -21,11 +21,14 @@ class NagReceiver : BroadcastReceiver() {
         val nag = intent.getIntExtra("nag", 0)
         when (intent.action) {
             FIRE -> {
-                // Held until the service has started (it releases it), at most ten seconds.
+                // Held until the service this fire starts has started (it releases it), at most ten seconds; let go at
+                // once when the fire starts none.
                 val lock = c.getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pinkoo:nag")
                 lock.acquire(10_000)
+                NagService.release()
                 NagService.waking = lock
                 Engine.fire(c)
+                if (!NagService.starting) NagService.release()
             }
             NOT_NOW -> Engine.ignore(c, nag, "notNow")
             DISMISS -> Engine.dismissed(c, nag)

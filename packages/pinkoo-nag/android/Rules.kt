@@ -58,8 +58,8 @@ internal object Rules {
         }
     }
 
-    /** A loud nag for [groups], one number for all of them. The next nag is set as if it rang out unanswered, which is
-     * what happens should the process die mid-ring. */
+    /** A loud nag for [groups], one number for all of them. Each rings until its ring's end ([ringOut]); the next nag
+     * is set as if it rang out unanswered, a fallback should nothing end the ring. */
     fun fire(plan: Plan, st: State, groups: List<Group>, now: Long, out: MutableList<Event>): Int {
         if (groups.isEmpty()) return st.nag
         val nag = ++st.nag
@@ -72,9 +72,31 @@ internal object Rules {
         return nag
     }
 
-    /** No ring can be stopped (notifications off): the groups wait silently, with no next nag, until they lapse or the app
-     * sends a plan again. */
+    /** No ring can be stopped (notifications off): the groups wait silently, with no next nag, until notifications are
+     * back ([unmute]) or they lapse. */
     fun mute(groups: List<Group>) { for (g in groups) { g.state = "pending"; g.nextAt = null } }
+
+    /** Notifications are back: every group [mute] silenced nags at once. */
+    fun unmute(plan: Plan, st: State, now: Long) {
+        for (g in st.groups.values) if (g.state == "pending" && g.nextAt == null && open(plan, st, g).isNotEmpty()) g.nextAt = now
+    }
+
+    /** When [g]'s ring ends unanswered: its fire plus the ladder's ring time. */
+    fun ringEnd(plan: Plan, g: Group): Long? = g.lastFiredAt?.let { it + plan.ladder.ringSec * 1000L }
+
+    /**
+     * Every group still ringing at its ring's end ends unanswered: the nag's one ignore (`timeout`), at that end, as the
+     * app's ladder counts it. The service's timer ends a ring it plays, and the alarm, set at the ring's end, ends one
+     * nothing played: a start the system refused, a process that died mid-ring. A group of the same nag that was
+     * opened meanwhile stopped ringing, and counts nothing here.
+     */
+    fun ringOut(plan: Plan, st: State, now: Long, out: MutableList<Event>) {
+        for (g in st.groups.values) {
+            if (g.state != "ringing") continue
+            val end = ringEnd(plan, g) ?: continue
+            if (end <= now) ignored(plan, st, g, "timeout", end, out)
+        }
+    }
 
     /**
      * Nag [nag] ignored by [reason]: once per nag, whatever ignores it after the first. Each of its groups climbs one
@@ -82,20 +104,24 @@ internal object Rules {
      */
     fun ignore(plan: Plan, st: State, nag: Int, reason: String, now: Long, out: MutableList<Event>): Boolean {
         var any = false
-        for (g in st.groups.values) {
-            if (g.nag != nag || g.ignoredNag >= nag || (g.state != "ringing" && g.state != "pending")) continue
-            g.ignores++; g.ignoredNag = nag; g.state = "pending"
-            g.nextAt = now + plan.interval(g.ignores)
-            for (d in open(plan, st, g)) out += event(st, d.key, "ignored", reason, now)
-            any = true
-        }
+        for (g in st.groups.values) if (g.nag == nag && ignored(plan, st, g, reason, now, out)) any = true
         return any
     }
 
-    /** The nag screen opened on [keys]: their ring stops, and nothing climbs. */
+    /** [g]'s nag ignored at [at], unless it was already: it climbs one rung, its next loud nag counted from [at]. */
+    private fun ignored(plan: Plan, st: State, g: Group, reason: String, at: Long, out: MutableList<Event>): Boolean {
+        if (g.nag == 0 || g.ignoredNag >= g.nag || (g.state != "ringing" && g.state != "pending")) return false
+        g.ignores++; g.ignoredNag = g.nag; g.state = "pending"
+        g.nextAt = at + plan.interval(g.ignores)
+        for (d in open(plan, st, g)) out += event(st, d.key, "ignored", reason, at)
+        return true
+    }
+
+    /** The nag screen opened on [keys]: their ring stops, and nothing climbs; the next nag counts from the opening, as
+     * the app's ladder does (`nagAfterOpen`). */
     fun opened(plan: Plan, st: State, keys: Collection<String>, now: Long, out: MutableList<Event>) {
         for (g in groupsOf(plan, st, keys)) {
-            if (g.state == "ringing") g.state = "pending"
+            if (g.state == "ringing") { g.state = "pending"; g.nextAt = now + plan.interval(g.ignores + 1) }
             for (d in open(plan, st, g)) if (d.key in keys) out += event(st, d.key, "opened", null, now)
         }
     }
@@ -123,17 +149,18 @@ internal object Rules {
 
     /** The stale notice's time, the plan's days after the app last sent one, or null once shown for that plan. */
     fun stale(plan: Plan, st: State): Long? =
-        if (st.planAt == 0L || st.staleShown == st.planAt) null else st.planAt + plan.idle.afterDays * 24 * 60 * 60_000L
+        if (st.planAt == 0L || st.staleShown == st.planAt) null else st.planAt + plan.idle.afterDays * 24L * 60 * 60_000
 
-    /** The one alarm to set: the earliest of every group's time, next nag or deadline, every open dose's lapse, and the
-     * stale notice. A time already past fires at once. */
+    /** The one alarm to set: the earliest of every group's time, ring's end, next nag or deadline, every open dose's
+     * lapse, and the stale notice. A time already past fires at once. */
     fun next(plan: Plan, st: State, zone: ZoneId = ZoneId.systemDefault()): Long? {
         val times = ArrayList<Long>()
         for (g in st.groups.values) {
             if (open(plan, st, g).isEmpty()) continue
             when (g.state) {
                 "upcoming" -> times += WallClock.epoch(g.group, zone)
-                "pending", "ringing" -> g.nextAt?.let { times += it }
+                "ringing" -> (ringEnd(plan, g) ?: g.nextAt)?.let { times += it }
+                "pending" -> g.nextAt?.let { times += it }
                 "promised" -> g.until?.let { times += it }
             }
         }

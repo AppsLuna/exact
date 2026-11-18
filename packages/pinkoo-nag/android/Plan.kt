@@ -78,7 +78,7 @@ internal class Plan(
                     if (d.isNull("promiseUntil")) null else d.optLong("promiseUntil"), d.optLong("lineSeed"))
             }.filter { it.key.isNotEmpty() && WallClock.valid(it.group) && WallClock.valid(it.miss) }
             val stock = o.optJSONObject("stock")?.let { Stock(it.optString("title"), it.optString("body")) }
-            val idle = o.optJSONObject("idle").let { Idle(it?.optInt("afterDays", 7)?.coerceAtLeast(1) ?: 7, it?.optString("title") ?: "", it?.optString("body") ?: "") }
+            val idle = o.optJSONObject("idle").let { Idle(it?.optInt("afterDays", 7)?.coerceIn(1, 366) ?: 7, it?.optString("title") ?: "", it?.optString("body") ?: "") }
             val mascots = whole(o.opt("mascots")).let { m -> if (m is JSONArray) objects(m).map(Mascot::parse) else emptyList() }
             return Plan(o.optLong("made"), ladder, rungs.ifEmpty { listOf(Rung(0, listOf("ring", "fullScreen"))) },
                 o.optBoolean("liveUpdate", true), volume, doses, Texts(o.optJSONObject("texts") ?: JSONObject()),
