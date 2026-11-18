@@ -10,12 +10,16 @@
 //  3. The second nag, rung in the background (Android 17's audio hardening must not mute it), swiped: its ignore,
 //     back at once silent; the third rung's bubble is an overlay window, hidden while the app is in front.
 //  4. The third nag's "Not now": its ignore, with no activity started.
-//  5. The fourth rung: an unlock opens the nag route, with no background activity start blocked.
+//  5. The fourth rung: an unlock opens the nag route, with no background activity start blocked; with the bubble
+//     closed too, when the start rests on the overlay access alone.
 //  6. A promise: the promise notification counts down, the next alarm is its deadline; on 36.1 and later it is a
 //     Live Update (promoted). 7. Taken: no notification, service, overlay or nag alarm left.
-//  8. A reboot mid-ladder: the alarm is set again at boot and the next nag rings.
+//  8. A reboot mid-ladder, locked with a PIN: the alarm is set again at boot and the next nag rings, audibly, before
+//     the first unlock (the sound's own file is in credential-encrypted storage then).
 //  9. A force-stop: nothing until the app is launched; then the overdue nag rings at once.
 // 10. Two doses a day and nothing else, in forced deep Doze: the app's process never starts, no wakeup, no wakelock.
+// 11. No exact-alarm access (Android 14 and later's default): the inexact alarm gives no start of the service, so the
+//     nag shows silent; the alarm at its ring's end still counts its one ignore, and the ladder climbs.
 //
 // The emulator is left as found: the fixture uninstalled, the ringer normal, no PIN, the battery and Doze reset.
 import { resolve } from 'node:path';
@@ -79,6 +83,12 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   const overlay = () => sh('dumpsys window windows').split('\n').some((l) => l.includes(id) && /APPLICATION_OVERLAY|ty=2038|type=2038/.test(l))
     || new RegExp(`Window\\{[^}]*${id.replaceAll('.', '\\.')}[^}]*\\}[\\s\\S]{0,1500}ty=APPLICATION_OVERLAY`).test(sh('dumpsys window windows'));
   const top = () => (sh('dumpsys activity activities').match(/topResumedActivity=.*|mResumedActivity: .*/) ?? [''])[0];
+  /** The bubble's window frame's centre, from `dumpsys window`. */
+  const bubbleAt = () => {
+    const block = sh('dumpsys window windows').split(/\n(?=\s*Window #)/).find((b) => b.includes(id) && /ty=APPLICATION_OVERLAY/.test(b));
+    const f = block?.match(/ frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+    return f ? { x: (+f[1] + +f[3]) >> 1, y: (+f[2] + +f[4]) >> 1 } : null;
+  };
   const pid = () => sh(`pidof ${id}`).trim();
   const minuteOf = (text) => text?.match(/T(\d\d):(\d\d)/);
   const msTo = (hhmm, extra = 0) => {
@@ -241,6 +251,22 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const blocked = /Background activity launch blocked|Abort background activity starts|BAL_BLOCK/i.test(logcat());
       check('android', 'an unlock opens the nag route', !!opened, top());
       check('android', 'with no background activity start blocked', !blocked, null);
+      // The bubble dragged onto its cross: no window of the app shows, and the unlock's start rests on the overlay
+      // access alone.
+      home();
+      const at = await until(() => bubbleAt(), 8000, 700);
+      const [w, h] = (sh('wm size').match(/(\d+)x(\d+)/) ?? [0, 1080, 2400]).slice(1).map(Number);
+      if (at) sh(`input swipe ${at.x} ${at.y} ${w >> 1} ${h - Math.round(h / 12)} 1500`);
+      check('android', 'the bubble closed on its cross', !!at && (await until(() => !overlay(), 5000)), at);
+      adb('logcat', '-c');
+      sh('input keyevent KEYCODE_SLEEP');
+      await wait(1500);
+      sh('input keyevent KEYCODE_WAKEUP');
+      sh('wm dismiss-keyguard');
+      const reopened = await until(() => /MainActivity|\.Notify/.test(top()), 12000, 1000);
+      const log5 = logcat();
+      save('05-unlock-bubble-closed.txt', log5.split('\n').filter((l) => /BAL_|Background activity|Notify/.test(l)).join('\n'));
+      check('android', 'with the bubble closed, an unlock still opens the nag route', !!reopened && !/Background activity launch blocked|Abort background activity starts|BAL_BLOCK/i.test(log5), top());
 
       // 6. A promise: the countdown, the next alarm its deadline, a Live Update on 36.1 and later.
       await press('Later');
@@ -267,7 +293,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     }
 
     if (step(8)) {
-      // 8. A reboot mid-ladder: the next nag is set again at boot and rings.
+      // 8. A reboot mid-ladder, locked with a PIN: the next nag is set again at boot and rings before the first unlock.
       launch();
       const group = await plan('Soon');
       home();
@@ -276,17 +302,31 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       await until(() => !playing(), 40000, 1000);
       const before = armed();
       save('08-before-reboot.txt', before?.block ?? '');
+      sh('locksettings set-pin 1234');
+      pinSet = true;
+      adb('logcat', '-c');
       adb('reboot');
       await wait(15000);
       adb('wait-for-device');
       await until(() => sh('getprop sys.boot_completed').trim() === '1', 180000, 2000);
-      await wait(8000);
-      sh('input keyevent KEYCODE_WAKEUP');
-      sh('wm dismiss-keyguard');
       const again = await until(() => armed(), 60000, 2000);
       save('08-after-reboot.txt', again?.block ?? alarm().slice(0, 2000));
       check('android', 'after a reboot the next nag is armed again', !!again?.clock, again?.block);
       check('android', 'and it rings', !!(await until(() => playing(), 100000, 1000)), null);
+      const locked = /RUNNING_LOCKED/.test(sh('dumpsys user'));
+      check('android', 'audibly, before the first unlock', locked && !/ring: no alarm sound/.test(logcat()), locked ? null : 'the user was unlocked');
+      save('08-logcat.txt', logcat().split('\n').filter((l) => /pinkoo|MediaPlayer|FGS/i.test(l)).join('\n'));
+      // Unlocked with the PIN, then the PIN cleared.
+      sh('input keyevent KEYCODE_WAKEUP');
+      await wait(800);
+      sh('input swipe 540 1800 540 600 200');
+      await wait(800);
+      sh('input text 1234');
+      sh('input keyevent KEYCODE_ENTER');
+      await until(() => /RUNNING_UNLOCKED/.test(sh('dumpsys user')), 15000, 1000);
+      sh('locksettings clear --old 1234');
+      pinSet = false;
+      sh('wm dismiss-keyguard');
       shot('08-after-reboot.png');
       launch();
       await press('Take');
@@ -333,6 +373,29 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       check('android', 'idle: no wakeup alarm, no wake lock, the process never started', !wakeups && !locks && !pid(), `uid ${uid}`);
       launch();
       await press('Take');
+    }
+
+    if (step(11)) {
+      // 11. Without exact-alarm access the alarm is inexact, and an inexact alarm gives no start of the service from
+      // the background: the nag shows, silent. The alarm at its ring's end counts its one ignore all the same.
+      sh(`cmd appops set ${id} SCHEDULE_EXACT_ALARM deny`);
+      await wait(2000);
+      launch();
+      check('android', 'no exact alarms', !!(await until(() => find(/exact=false/), 15000, 700)), find(/exact=/)?.text);
+      adb('logcat', '-c');
+      const group = await plan('Soon');
+      home();
+      // An inexact alarm comes within its window, about a minute here.
+      const shown = await until(() => nagShown(), msTo(minuteOf(group), 150_000), 2000);
+      check('android', 'inexact: the nag shows', !!shown, null);
+      check('android', 'the service was refused, so nothing plays', /Background started FGS: Disallowed[^\n]*pinkoo\.nag\.NagService/.test(logcat()) && !playing(), null);
+      const quiet = await until(() => /waiting/.test(channelOf(nagShown())), 180_000, 3000);
+      check('android', 'its ring ends at the alarm on its ring end: the waiting notification', !!quiet, nagShown()?.slice(0, 300));
+      launch();
+      const one = await doses((t) => /^pending:1:1$/.test(t));
+      check('android', 'one ignore, a rung up, with no service', one === 'pending:1:1', one);
+      await press('Take');
+      sh(`cmd appops set ${id} SCHEDULE_EXACT_ALARM allow`);
     }
   } finally {
     if (pinSet) sh('locksettings clear --old 1234');

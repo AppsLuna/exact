@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { checker } from '../../camera/test/fixture.mjs';
 import { ensureShells } from '../../../scripts/app-shells.mjs';
 import { apkBuildDir } from '../../../scripts/agent-android.mjs';
+import { androidPackageId } from '../../../scripts/app.mjs';
 
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const argv = process.argv.slice(2), flag = (f) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : null);
@@ -70,7 +71,9 @@ try {
 
   if (emulator) {
     if (out) mkdirSync(out, { recursive: true });
-    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id, emulator, check, run, out }));
+    // The drive speaks to adb, which knows the Android package (the app's id with `-` as `_`), not the app's id.
+    const packageId = androidPackageId(JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')));
+    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id: packageId, emulator, check, run, out }));
   }
 } finally {
   if (!keep) rmSync(dir, { recursive: true, force: true });
