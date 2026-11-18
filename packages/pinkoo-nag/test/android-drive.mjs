@@ -19,7 +19,11 @@
 //  9. A force-stop: nothing until the app is launched; then the overdue nag rings at once.
 // 10. Two doses a day and nothing else, in forced deep Doze: the app's process never starts, no wakeup, no wakelock.
 // 11. No exact-alarm access (Android 14 and later's default): the inexact alarm gives no start of the service, so the
-//     nag shows silent; the alarm at its ring's end still counts its one ignore, and the ladder climbs.
+//     nag sounds itself, on the ring channel; the alarm at its ring's end still counts its one ignore, and the ladder
+//     climbs.
+// 12. Every nag its own full-screen nag: the first and the second over the keyguard (a new notification each). Then a
+//     process the alarm started, with no activity: the bubble hides over the app the waiting notification opens (the
+//     module is made after that resume), and a pause and a resume post nothing again.
 //
 // The emulator is left as found: the fixture uninstalled, the ringer normal, no PIN, the battery and Doze reset.
 import { resolve } from 'node:path';
@@ -72,9 +76,9 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     const all = sh('dumpsys notification --noredact');
     return all.split(/\n(?=\s*NotificationRecord\()/).filter((r) => r.includes(`pkg=${id}`));
   };
-  // The engine's notification ids (`Shade`): the nag, the promise.
-  const NAG = 'id=7233792 ', PROMISE = 'id=7233793 ';
-  const nagShown = () => notifications().find((r) => r.includes(NAG));
+  // The engine's notification ids (`Shade`): the nag (two, one loud nag to the next), the promise.
+  const NAGS = ['id=7233792 ', 'id=7233796 '], PROMISE = 'id=7233793 ';
+  const nagShown = () => notifications().find((r) => NAGS.some((n) => r.includes(n)));
   const promiseShown = () => notifications().find((r) => r.includes(PROMISE));
   const channelOf = (r) => (r?.match(/channel=([\w.]+)/) ?? [])[1] ?? (r?.match(/mChannelId=([\w.]+)/) ?? [])[1] ?? '';
   let uid = '?';
@@ -289,7 +293,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       check('android', 'no overlay window', !overlay(), null);
       const after = armed();
       const days = after?.at ? (new Date(after.at.replace(' ', 'T')) - new Date(Number(sh('date +%s').trim()) * 1000)) / 86_400_000 : 7;
-      check('android', 'only the stale notice is armed, a week out', days > 6.9, after?.block);
+      check('android', 'only the stale notice is armed, six days out', days > 5.9, after?.block);
     }
 
     if (step(8)) {
@@ -388,14 +392,72 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       // An inexact alarm comes within its window, about a minute here.
       const shown = await until(() => nagShown(), msTo(minuteOf(group), 150_000), 2000);
       check('android', 'inexact: the nag shows', !!shown, null);
-      check('android', 'the service was refused, so nothing plays', /Background started FGS: Disallowed[^\n]*pinkoo\.nag\.NagService/.test(logcat()) && !playing(), null);
+      check('android', 'the service was refused, so the app plays nothing', /Background started FGS: Disallowed[^\n]*pinkoo\.nag\.NagService/.test(logcat()) && !playing(), null);
+      // Decision 5: it sounds itself, on the ring channel, insistent (FLAG_INSISTENT, 0x4), played by the system.
+      const flags = Number.parseInt((shown?.match(/ flags=0x([0-9a-f]+)/) ?? [])[1] ?? '0', 16);
+      check('android', 'it sounds itself on the ring channel, insistent', channelOf(shown) === 'pinkoo.nag.ring' && (flags & 4) !== 0, shown?.slice(0, 400));
+      save('11-sound.txt', sh('dumpsys notification | grep -iE "mSoundNotificationKey|mVibrateNotificationKey"'));
+      check('android', 'and the system plays its sound', new RegExp(`mSoundNotificationKey=[^\\n]*\\|${id.replaceAll('.', '\\.')}\\|`).test(sh('dumpsys notification')), null);
       const quiet = await until(() => /waiting/.test(channelOf(nagShown())), 180_000, 3000);
       check('android', 'its ring ends at the alarm on its ring end: the waiting notification', !!quiet, nagShown()?.slice(0, 300));
+      check('android', 'and its sound stops', !new RegExp(`mSoundNotificationKey=[^\\n]*\\|${id.replaceAll('.', '\\.')}\\|`).test(sh('dumpsys notification')), null);
       launch();
       const one = await doses((t) => /^pending:1:1$/.test(t));
       check('android', 'one ignore, a rung up, with no service', one === 'pending:1:1', one);
       await press('Take');
       sh(`cmd appops set ${id} SCHEDULE_EXACT_ALARM allow`);
+    }
+
+    if (step(12)) {
+      // 12. Every loud nag is a new notification, so each launches its full-screen nag (an update launches none).
+      launch();
+      const group = await plan('Soon');
+      home();
+      sh('locksettings set-pin 1234');
+      pinSet = true;
+      for (const n of [1, 2]) {
+        sh('input keyevent KEYCODE_SLEEP');
+        check('android', `nag ${n} rings`, !!(await until(() => playing(), 100_000, 1000)), null);
+        const fsi = await until(() => /MainActivity|\.Notify/.test(top()) && /Awake/.test(sh('dumpsys power | grep mWakefulness=')), 10000);
+        const keyguard = sh('dumpsys window | grep -iE "mShowingLockscreen|KeyguardShowing|isKeyguardShowing|mOccluded|occluded" | head -8');
+        shot(`12-nag${n}-over-keyguard.png`);
+        check('android', `nag ${n}: its own full-screen nag over the keyguard, the screen turned on`, !!fsi && /true/i.test(keyguard), `${top()} ${keyguard}`);
+        await until(() => !playing(), 40_000, 1000);
+        // The route left, as Pinkoo's root does: the keyguard covers it again, and only a new full-screen nag shows it.
+        await press('Leave', 6000);
+      }
+      sh('locksettings clear --old 1234');
+      pinSet = false;
+      sh('input keyevent KEYCODE_WAKEUP');
+      sh('wm dismiss-keyguard');
+      home();
+      // Rung 2: the process ends (the bubble's window with it); the third nag's alarm starts it again, with no activity.
+      await until(() => { sh(sdk >= 34 ? `am stop-app ${id}` : `am kill ${id}`); return !pid(); }, 15000, 1500);
+      check('android', 'nag 3 rings in a process the alarm started', !!(await until(() => playing(), 100_000, 1000)) && !!pid(), null);
+      await until(() => !playing(), 40_000, 1000);
+      check('android', 'rung 3, waiting: the bubble shows over the home screen', !!(await until(() => overlay(), 8000)), null);
+      // The waiting notification tapped: the app comes through the alias, its module made after that resume.
+      sh('cmd statusbar expand-notifications');
+      await wait(1200);
+      const row = await until(() => find(/^Pill A is waiting/), 6000, 700);
+      if (row) sh(`input tap ${row.x} ${row.y}`);
+      const opened = await until(() => top().includes(id), 10000, 700);
+      await wait(2500);
+      shot('12-opened-from-the-notification.png');
+      check('android', 'opened from the notification, the app hides the bubble', !!row && !!opened && !overlay(), top());
+      // Nothing changed: a pause and a resume post nothing again (an update popped the heads-up again).
+      const stamp = () => (nagShown()?.match(/mUpdateTimeMs=(\d+)/) ?? [])[1] ?? null;
+      const before = stamp();
+      home();
+      await wait(1500);
+      launch();
+      await wait(1500);
+      home();
+      await wait(1500);
+      check('android', 'a pause and a resume post nothing again', !!before && stamp() === before, `${before} ${stamp()}`);
+      launch();
+      await press('Take');
+      await until(() => !playing() && !nagShown(), 10000);
     }
   } finally {
     if (pinSet) sh('locksettings clear --old 1234');

@@ -17,13 +17,17 @@ const texts = {
   title: 'Time for {names}', body: 'Due at {time}', publicTitle: 'A reminder', publicBody: 'Unlock to see it',
   take: 'Take now', promise: 'Pinky promise', notNow: 'Not now', pending: '{names} is waiting', promiseChip: '{names} by {time}',
   bubble: 'Open the reminder', channelNag: 'Reminders', channelPending: 'Waiting reminders', channelNotice: 'Notices',
-  lines: [['Psst, it is time.', 'Your turn now.'], ['Still waiting here.'], ['I am not going anywhere.'], ['Every unlock, until you do.']],
+  channelRing: 'Reminders with sound',
+  lines: [['Psst, it is time.', 'Your turn now.'], ['Still waiting here.'], ['I am not going anywhere.'], ['Every unlock, until you do.'],
+    ['Top of the ladder.']],
 };
+// One rung per ignore up to the top, 4, which adds nothing of its own: Pinkoo's plan (src/app/plan.ts).
 const rungs = [
   { ignores: 0, add: ['ring', 'fullScreen'] },
   { ignores: 1, add: ['returning'] },
   { ignores: 2, add: ['bubble'] },
   { ignores: 3, add: ['unlock'] },
+  { ignores: 4, add: [] },
 ];
 // A round body with a belly, eyes, cheeks and a smile: enough to see the bubble and the picture are the plan's. Its
 // parts travel whole as JSON, each with only the fields it uses.
@@ -47,7 +51,7 @@ const plan = (now: number, times: number[], firstMin: number, repeatMin: number,
   rungs: ringSec ? rungs : [{ ignores: 0, add: rungs.flatMap((r) => r.add) }], liveUpdate: true, volume: [0.6, 0.8, 1],
   doses: times.map((t) => ({ key: `pill@${local(t)}`, group: local(t), name: 'Pill A', miss: local(t + 24 * 3_600_000), promiseUntil: null, lineSeed: 0 })),
   texts, mascot, mascots: [mascot], stock: { title: 'Pill A is running low', body: '3 left' },
-  idle: { afterDays: 7, title: 'Open the fixture', body: 'to keep the reminders going' },
+  idle: { afterDays: 6, title: 'Open the fixture', body: 'to keep the reminders going' },
 });
 
 const sources: Sources = {
