@@ -1,0 +1,381 @@
+{
+  "kind": "interface",
+  "name": "@pinkoo/nag",
+  "version": "1.0.0",
+  "start": "load",
+  "grants": [
+    "device.alarms"
+  ],
+  "shapes": {
+    "NagPlan": {
+      "v": "number",
+      "made": "number",
+      "zone": "string",
+      "locale": "string",
+      "ladder": "NagLadder",
+      "rungs": "NagRung[]",
+      "liveUpdate": "bool",
+      "volume": "number[]",
+      "doses": "NagDose[]",
+      "texts": "NagTexts",
+      "mascot": "json<any>",
+      "mascots": "json<any[]>",
+      "stock": "option<NagStock>",
+      "idle": "NagIdle"
+    },
+    "NagLadder": {
+      "firstMin": "number",
+      "repeatMin": "number",
+      "ringSec": "number"
+    },
+    "NagRung": {
+      "ignores": "number",
+      "add": "string[]"
+    },
+    "NagDose": {
+      "key": "string",
+      "group": "string",
+      "name": "string",
+      "miss": "string",
+      "promiseUntil": "option<number>",
+      "lineSeed": "number"
+    },
+    "NagTexts": {
+      "title": "string",
+      "body": "string",
+      "publicTitle": "string",
+      "publicBody": "string",
+      "take": "string",
+      "promise": "string",
+      "notNow": "string",
+      "pending": "string",
+      "promiseChip": "string",
+      "bubble": "string",
+      "lines": "string[][]",
+      "channelNag": "string",
+      "channelPending": "string",
+      "channelNotice": "string"
+    },
+    "NagStock": {
+      "title": "string",
+      "body": "string"
+    },
+    "NagIdle": {
+      "afterDays": "number",
+      "title": "string",
+      "body": "string"
+    },
+    "NagState": {
+      "doses": "NagDoseState[]",
+      "events": "NagEvent[]"
+    },
+    "NagDoseState": {
+      "key": "string",
+      "state": "enum<upcoming|ringing|pending|promised|resolved|lapsed>",
+      "ignores": "number",
+      "rung": "number",
+      "nextAt": "option<number>",
+      "lastFiredAt": "option<number>"
+    },
+    "NagEvent": {
+      "id": "string",
+      "key": "string",
+      "kind": "enum<fired|ignored|opened|lapsed>",
+      "reason": "option<enum<swipe|notNow|timeout|bubble>>",
+      "at": "number"
+    },
+    "NagStatus": {
+      "available": "bool",
+      "notifications": "enum<granted|denied|prompt>",
+      "channelBlocked": "bool",
+      "exactAlarms": "bool",
+      "fullScreen": "bool",
+      "overlay": "bool",
+      "promoted": "enum<granted|denied|unavailable>",
+      "batteryUnrestricted": "bool",
+      "backgroundRestricted": "bool",
+      "standbyBucket": "number",
+      "alarmVolume": "number",
+      "dndAllowsAlarms": "bool",
+      "maker": "string"
+    }
+  },
+  "names": [
+    {
+      "source": "nagStatus",
+      "live": true,
+      "answers": "NagStatus",
+      "substitute": {
+        "default": {
+          "available": true,
+          "notifications": "prompt",
+          "channelBlocked": false,
+          "exactAlarms": false,
+          "fullScreen": false,
+          "overlay": false,
+          "promoted": "unavailable",
+          "batteryUnrestricted": false,
+          "backgroundRestricted": false,
+          "standbyBucket": 10,
+          "alarmVolume": 1,
+          "dndAllowsAlarms": true,
+          "maker": ""
+        },
+        "targets": {
+          "web": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "ios": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "macos": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "linux": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "tvos": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "windows": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          },
+          "terminal": {
+            "available": false,
+            "notifications": "denied",
+            "channelBlocked": false,
+            "exactAlarms": false,
+            "fullScreen": false,
+            "overlay": false,
+            "promoted": "unavailable",
+            "batteryUnrestricted": false,
+            "backgroundRestricted": false,
+            "standbyBucket": 0,
+            "alarmVolume": 0,
+            "dndAllowsAlarms": false,
+            "maker": ""
+          }
+        },
+        "web": {
+          "available": false,
+          "notifications": "denied",
+          "channelBlocked": false,
+          "exactAlarms": false,
+          "fullScreen": false,
+          "overlay": false,
+          "promoted": "unavailable",
+          "batteryUnrestricted": false,
+          "backgroundRestricted": false,
+          "standbyBucket": 0,
+          "alarmVolume": 0,
+          "dndAllowsAlarms": false,
+          "maker": ""
+        }
+      }
+    },
+    {
+      "source": "nagState",
+      "live": true,
+      "answers": "NagState",
+      "substitute": {
+        "default": {
+          "doses": [],
+          "events": []
+        }
+      }
+    },
+    {
+      "send": "scheduleNags",
+      "permission": "none",
+      "grants": [
+        "device.alarms"
+      ],
+      "options": {
+        "plan": "NagPlan"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      },
+      "contract": false
+    },
+    {
+      "send": "resolveNags",
+      "permission": "none",
+      "options": {
+        "keys": "string[]",
+        "kind": "enum<taken|skipped|promised>",
+        "until": "option<number>"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "ackNagEvents",
+      "permission": "none",
+      "options": {
+        "through": "string"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "nagScreen",
+      "permission": "none",
+      "options": {
+        "showing": "bool",
+        "keys": "string[]"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "requestNagAccess",
+      "permission": "none",
+      "options": {
+        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping>"
+      },
+      "answers": "NagStatus",
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "previewNag",
+      "permission": "none",
+      "options": {
+        "rung": "number"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    }
+  ]
+}

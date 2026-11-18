@@ -1,0 +1,52 @@
+{
+  "kind": "implementation",
+  "implements": "@pinkoo/nag@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "manifest": {
+    "receivers": [
+      {
+        "name": "pinkoo.nag.NagReceiver",
+        "directBootAware": true
+      },
+      {
+        "name": "pinkoo.nag.NagSystemReceiver",
+        "directBootAware": true,
+        "actions": [
+          "android.intent.action.LOCKED_BOOT_COMPLETED",
+          "android.intent.action.BOOT_COMPLETED",
+          "android.intent.action.TIME_SET",
+          "android.intent.action.TIMEZONE_CHANGED",
+          "android.intent.action.MY_PACKAGE_REPLACED",
+          "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"
+        ]
+      }
+    ],
+    "services": [
+      {
+        "name": "pinkoo.nag.NagService",
+        "directBootAware": true,
+        "foregroundServiceType": "systemExempted|specialUse",
+        "subtype": "Rings a medication reminder the person scheduled, then keeps it on screen (a bubble, opening at unlock) until they confirm or skip the dose"
+      }
+    ],
+    "permissions": [
+      "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+      "android.permission.POST_PROMOTED_NOTIFICATIONS"
+    ]
+  },
+  "artifacts": [],
+  "class": "pinkoo.nag.NagModule"
+}
