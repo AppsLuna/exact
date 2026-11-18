@@ -37,6 +37,7 @@ android {
             "../../../packages/push/android", "../../../packages/push/test/android",
             "../../../packages/recording/android", "../../../packages/recording/test",
             "../../../packages/speech-recognition/android", "../../../packages/speech-recognition/test",
+            "../../../packages/pinkoo-nag/android", "../../../packages/pinkoo-nag/test",
         ))
     }
     // Robolectric keeps a sandbox for each SDK level and shadow set the tests name, more than
