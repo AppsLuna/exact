@@ -689,6 +689,27 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
+    // Android special access a package checks and sends the person to
+    // Settings for; nothing prompts, so no purpose. A full-screen intent
+    // outside a call: from Android 14 granted by default only to calling and
+    // alarm apps ("Secure full-screen intent notifications"). Drawing over
+    // other apps: `SYSTEM_ALERT_WINDOW`, an app-op the person switches on.
+    Device {
+        name: "full-screen-intent",
+        sandbox: Some(sandbox::NONE),
+        android: &["android.permission.USE_FULL_SCREEN_INTENT"],
+        purpose: false,
+        tvos: false,
+        ..ROW
+    },
+    Device {
+        name: "overlay",
+        sandbox: Some(sandbox::NONE),
+        android: &["android.permission.SYSTEM_ALERT_WINDOW"],
+        purpose: false,
+        tvos: false,
+        ..ROW
+    },
     // NFC, `@exact/nfc`'s (LLP 1133.035 D15): iOS asks nothing, yet ends an
     // app that reads a tag without the usage key, and reads none without the
     // reader-session entitlement, whose value lists the formats (`TAG`, the
@@ -1277,6 +1298,35 @@ mod tests {
         assert_eq!(row.ios_flags, ["ExactCapturesInBackground"]);
         assert_eq!(row.android_services, ["capture:microphone"]);
         assert!(row.web.is_none() && !row.tvos && row.macos.is_empty());
+    }
+
+    /// Android's special access lines: one permission each, no purpose, no
+    /// other platform.
+    #[test]
+    fn full_screen_intent_and_overlay_are_android_special_access() {
+        let rows = device_grants("device.full-screen-intent\ndevice.overlay").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|g| (g.device.name, g.purpose, g.device.android))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "full-screen-intent",
+                    "",
+                    &["android.permission.USE_FULL_SCREEN_INTENT"][..]
+                ),
+                (
+                    "overlay",
+                    "",
+                    &["android.permission.SYSTEM_ALERT_WINDOW"][..]
+                ),
+            ]
+        );
+        for g in &rows {
+            assert!(g.device.ios.is_empty() && g.device.web.is_none() && !g.device.tvos);
+        }
+        let named = device_grants("device.overlay purpose.bubble").unwrap_err();
+        assert!(named[0].contains("names no purpose"), "{named:?}");
     }
 
     /// LLP 1133.013 D11: one line turns on the three sensors' features.
