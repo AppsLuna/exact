@@ -157,6 +157,21 @@ test('the allow-list refuses, naming what', () => {
   refuses({ services: [{ name: 'exact.alarms.S' }, { name: 'exact.alarms.S' }] }, 'twice');
 });
 
+test('a specialUse service carries its subtype as the property Play reviews, and needs one; types join with |', () => {
+  const xml = manifestFragment(impl({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'specialUse', subtype: 'Keeps a reminder & its bubble' }] }));
+  assert.match(xml, /<service android:name="exact\.alarms\.S" android:exported="false" android:foregroundServiceType="specialUse">\n {12}<property android:name="android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Keeps a reminder &amp; its bubble" \/>\n {8}<\/service>/);
+  const refuses = (manifest, what) => assert.throws(() => manifestFragment(impl(manifest)), (e) => e.message.includes(what));
+  refuses({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'specialUse' }] }, 'no subtype');
+  refuses({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'systemExempted', subtype: 'x' }] }, 'a subtype without specialUse');
+  refuses({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'specialUse', subtype: ' ' }] }, 'not words');
+  refuses({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'systemExempted|location', subtype: 'x' }] }, '"location"');
+  refuses({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'specialUse|specialUse', subtype: 'x' }] }, 'twice');
+  assert.match(manifestFragment(impl({ services: [{ name: 'exact.alarms.S', foregroundServiceType: 'systemExempted|specialUse', subtype: 'Rings, then keeps a reminder' }] })),
+    /android:foregroundServiceType="systemExempted\|specialUse">\n {12}<property android:name="android\.app\.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Rings, then keeps a reminder" \/>/);
+  assert.deepEqual(fragmentPermissions(impl({ permissions: ['android.permission.FOREGROUND_SERVICE_SPECIAL_USE', 'android.permission.POST_PROMOTED_NOTIFICATIONS'] })),
+    ['android.permission.FOREGROUND_SERVICE_SPECIAL_USE', 'android.permission.POST_PROMOTED_NOTIFICATIONS']);
+});
+
 test("health's fragment: Health Connect queried, the rationale and the usage alias exported for the system alone", () => {
   const json = JSON.parse(readFileSync(resolve(import.meta.dir, '../packages/health/android/exact.json'), 'utf8'));
   const health = [{ extension: 'health', className: 'exact.health.HealthModule', manifest: json.manifest }];

@@ -45,8 +45,10 @@ export const RECEIVER_ACTIONS = new Set([
   'android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED',
 ]);
 
-/** The foreground service types a package's service may declare. */
-export const SERVICE_TYPES = new Set(['systemExempted']);
+/** The foreground service types a package's service may declare, one or several joined by `|`. `specialUse` needs its
+ * `subtype`, the use in words, which the manifest carries as `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` and Play reviews
+ * ("Foreground service types": special use). */
+export const SERVICE_TYPES = new Set(['systemExempted', 'specialUse']);
 
 /** The packages a fragment may make visible (`<queries>`): Health Connect's provider on Android 13 and earlier (LLP
  * 1133.026 D19 item 3). */
@@ -93,7 +95,8 @@ export const ALIAS_CATEGORIES = new Set(['android.intent.category.HEALTH_PERMISS
 
 /** The normal permissions a fragment may declare (LLP 1133.031 D12 item 1): `protectionLevel="normal"` in the
  * platform's own manifest, granted at install with no prompt. */
-export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC']);
+export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE', 'android.permission.POST_PROMOTED_NOTIFICATIONS']);
 
 /** The normal permissions every bound implementation's fragment declares, which the build adds as `<uses-permission>`
  * beside the grants' (`-Ppermissions`). Throws, naming the package, for any permission not on the list. */
@@ -114,7 +117,7 @@ export function fragmentPermissions(bound) {
 
 const FIELDS = {
   receivers: new Set(['name', 'directBootAware', 'actions']),
-  services: new Set(['name', 'directBootAware', 'foregroundServiceType', 'permission', 'actions']),
+  services: new Set(['name', 'directBootAware', 'foregroundServiceType', 'subtype', 'permission', 'actions']),
   queries: new Set(['package', 'action', 'scheme']),
   activities: new Set(['name', 'actions']),
   aliases: new Set(['name', 'targetActivity', 'action', 'category']),
@@ -239,10 +242,16 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
           else lines.push(`        <receiver android:name="${c.name}" android:exported="false"${boot}>`, '            <intent-filter>',
             ...actions.map((a) => `                <action android:name="${a}" />`), '            </intent-filter>', '        </receiver>');
         } else {
-          const type = c.foregroundServiceType;
-          if (type !== undefined) listed(SERVICE_TYPES, type, `${c.name} the foreground service type`);
+          const type = c.foregroundServiceType, types = typeof type === 'string' ? type.split('|') : [];
+          if (type !== undefined) for (const t of types.length ? types : [type]) listed(SERVICE_TYPES, t, `${c.name} the foreground service type`);
+          if (new Set(types).size !== types.length) refuse(`gives ${c.name} a foreground service type twice`);
+          const special = types.includes('specialUse');
+          if (special !== (c.subtype !== undefined)) refuse(`gives ${c.name} ${special ? 'no subtype; specialUse needs one' : 'a subtype without specialUse'}`);
+          if (c.subtype !== undefined && (typeof c.subtype !== 'string' || !c.subtype.trim())) refuse(`gives ${c.name} a subtype that is not words`);
           if (c.permission === undefined && c.actions === undefined) {
-            lines.push(`        <service android:name="${c.name}" android:exported="false"${boot}${type ? ` android:foregroundServiceType="${type}"` : ''} />`);
+            const open = `        <service android:name="${c.name}" android:exported="false"${boot}${type ? ` android:foregroundServiceType="${type}"` : ''}`;
+            if (c.subtype === undefined) lines.push(`${open} />`);
+            else lines.push(`${open}>`, `            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="${escape(c.subtype)}" />`, '        </service>');
             continue;
           }
           if (c.permission === undefined) {
