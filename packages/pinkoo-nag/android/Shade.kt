@@ -7,6 +7,10 @@
 // never for an update of one that shows (measured on Android 16: a dose's third nag showed no full-screen nag), so the
 // nag notification's id alternates between two from one nag to the next ([nagId]). A notification is posted only when
 // what it shows changed or it went (an update of the loud nag popped its heads-up again), and an update never alerts.
+//
+// A nag that rang with the app in front ([Live.quiet], decision 17) is posted on the waiting channel, whose low
+// importance never shows a heads-up, and without its full-screen intent: the nag screen in front is the pop-up, and a
+// heads-up over it only covered its top. The service still plays the ring.
 package pinkoo.nag
 
 import android.app.Notification
@@ -39,6 +43,8 @@ internal class Live(val plan: Plan, val st: State) {
     val words: Set<String> = groups.flatMap { plan.words(Rules.rung(plan, it)) }.toSet()
     /** The group the nag opens at: the one ringing, else the one waiting longest. */
     val lead: Group? = ringing.firstOrNull() ?: groups.minByOrNull { it.group }
+    /** The nag rang with the app in front (decision 17): no heads-up and no full-screen intent, to its end. */
+    val quiet: Boolean = nag != 0 && nag == st.quiet
     /** The lead group's rung: the mascot the notification and the bubble show, as the nag route they open does. */
     val face: Int = lead?.let { Rules.rung(plan, it) } ?: 0
 
@@ -185,7 +191,8 @@ internal object Shade {
         val names = live.names(if (loud) live.ringing else live.groups)
         val at = runCatching { WallClock.epoch(lead.group) }.getOrNull()
         val sub = fill(c, plan.texts.body, names, at)
-        val channel = if (!loud) CH_WAITING else if (sounding) CH_RING else CH_NAG
+        // A ring no service plays sounds itself on the ring channel even in front: in front a service always starts.
+        val channel = if (!loud) CH_WAITING else if (sounding) CH_RING else if (live.quiet) CH_WAITING else CH_NAG
         return NagLook(channel, fill(c, if (loud) plan.texts.title else plan.texts.pending, names, at),
             // The mascot's line says it; the body (the time) goes in the header. Without a line, the body is the text.
             Rules.line(plan, live.st, lead).ifEmpty { sub }, sub, at, live.face, lead.group, live.nag,
@@ -194,9 +201,10 @@ internal object Shade {
 
     /**
      * The nag notification brought to [live] through [post] (the service's foreground, or a plain post): loud while
-     * something rings (heads-up, the alarm category, the full-screen nag when its nuisance is on), [sounding] when no
-     * service plays the ring, silent while it waits. Posted only when what it shows changed or it went (swiped,
-     * cleared), or when [force]d; the other id goes, so there is one. Whether it posted.
+     * something rings (heads-up, the alarm category, the full-screen nag when its nuisance is on; neither heads-up nor
+     * full-screen nag for a nag that rang in front, [Live.quiet]), [sounding] when no service plays the ring, silent
+     * while it waits. Posted only when what it shows changed or it went (swiped, cleared), or when [force]d; the other
+     * id goes, so there is one. Whether it posted.
      */
     fun nag(c: Context, live: Live, loud: Boolean, sounding: Boolean = false, force: Boolean = false, post: (Int, Notification) -> Unit): Boolean {
         val id = nagId(live.nag)

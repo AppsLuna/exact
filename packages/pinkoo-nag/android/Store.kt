@@ -58,6 +58,9 @@ internal class State(
     var promiseDismissed: Long = 0,
     /** The nag the person closed the bubble in: it stays closed until the next, across a process death (decision 5). */
     var bubbleClosed: Int = 0,
+    /** The last nag that rang with the app in front: no heads-up and no full-screen intent to its end, across a
+     * process death, so leaving the app or a restart never pops it up (decision 17). */
+    var quiet: Int = 0,
     /** Made anew, not read: there was no state file, or it could not be read. Not kept. */
     val fresh: Boolean = false,
 ) {
@@ -65,12 +68,13 @@ internal class State(
         .put("groups", JSONArray(groups.values.map { it.json() })).put("doses", JSONArray(doses.values.map { it.json() }))
         .put("nag", nag).put("event", event).put("planHash", planHash).put("planAt", planAt).put("staleShown", staleShown)
         .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed).put("bubbleClosed", bubbleClosed)
+        .put("quiet", quiet)
 
     companion object {
         fun from(o: JSONObject): State {
             val s = State(nag = o.optInt("nag"), event = o.optLong("event"), planHash = o.optInt("planHash"), planAt = o.optLong("planAt"),
                 staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), swiped = o.optInt("swiped"),
-                promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"))
+                promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"), quiet = o.optInt("quiet"))
             o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) Group.from(a.getJSONObject(i)).let { s.groups[it.group] = it } }
             o.optJSONArray("doses")?.let { a -> for (i in 0 until a.length()) DoseState.from(a.getJSONObject(i)).let { s.doses[it.key] = it } }
             return s

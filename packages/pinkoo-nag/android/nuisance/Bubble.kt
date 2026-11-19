@@ -31,8 +31,6 @@ internal object Bubble : Nuisance {
 
     override fun allowed(c: Context): Boolean = Settings.canDrawOverlays(c)
 
-    /** The app's activity is resumed: the module reads it when it is made and hears each resume and pause. */
-    @Volatile var appInFront = false
     private var view: BubbleView? = null
     private var target: CloseTarget? = null
     private var last: Live? = null
@@ -52,7 +50,7 @@ internal object Bubble : Nuisance {
 
     override fun apply(c: Context, live: Live, on: Boolean) {
         last = live
-        if (on && !appInFront && live.nag != live.st.bubbleClosed && live.groups.isNotEmpty()) show(c.applicationContext, live) else hide()
+        if (on && !Engine.appInFront && live.nag != live.st.bubbleClosed && live.groups.isNotEmpty()) show(c.applicationContext, live) else hide()
     }
 
     private fun wm(c: Context) = c.getSystemService(WindowManager::class.java)

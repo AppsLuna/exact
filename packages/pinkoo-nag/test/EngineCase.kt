@@ -71,7 +71,7 @@ internal abstract class EngineCase {
         NagFixtures.clear(app)
         NagService.running = null
         NagService.starting = false
-        Bubble.appInFront = false
+        Engine.appInFront = false
         Shade.forget()
         clock = at("2026-11-18T07:00")
         Engine.clock = { clock }
@@ -81,7 +81,7 @@ internal abstract class EngineCase {
         services.forEach { runCatching { it.destroy() } }
         NagService.running = null
         Bubble.hide()
-        Bubble.appInFront = false
+        Engine.appInFront = false
         Unlock.apply(app, Live(Plan.parse(NagFixtures.plan()), State()), on = false)
         TimeZone.setDefault(zone)
         NagFixtures.clear(app)

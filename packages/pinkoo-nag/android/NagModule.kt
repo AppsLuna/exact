@@ -42,8 +42,22 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         /** The latest a ring test may be asked for, and how long its ring lasts unanswered. */
         const val PREVIEW_AFTER_MAX_MS = 60_000L
         const val PREVIEW_RING_MS = 20_000L
+        /**
+         * Decision 17: how long after a nag rang with the app in front the module opens its nag route, unless the nag
+         * screen shows it by then. A route the app itself just opened on the dose ("Ainda não" in Novo remédio) says so
+         * as it shows (`nagScreen`), which its first data read may delay past the ring's start; opened again on top of
+         * it, the route would show twice.
+         */
+        const val IN_FRONT_OPEN_MS = 1_000L
         @Volatile private var live: WeakReference<NagModule>? = null
         internal fun changed() { live?.get()?.let { it.context.changed("nag.nagState"); it.context.changed("nag.nagStatus") } }
+
+        /** [groups] rang with the app in front ([Engine.fire]): the module brings the nag route ([rangInFront]). Any
+         * thread. */
+        internal fun rang(groups: List<String>) {
+            val m = live?.get() ?: return
+            m.main.post { m.rangInFront(groups) }
+        }
     }
 
     private val app: Context get() = context.application
@@ -62,6 +76,11 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private val previewEnd = Runnable { previewStop(timedOut = true) }
     /** TalkBack (touch exploration) turned on or off: the status changes. */
     private val touchExploration = AccessibilityManager.TouchExplorationStateChangeListener { changed() }
+    /** The doses the nag route on top shows, as it said (`nagScreen`); none once it is no longer on top. */
+    private var screen: Set<String> = emptySet()
+    /** The groups that rang in front, whose nag route opens at [IN_FRONT_OPEN_MS] ([rangInFront]). */
+    private var inFront: List<String> = emptyList()
+    private val openInFront = Runnable { openRang() }
 
     init {
         if (!context.agent) {
@@ -97,8 +116,14 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             "ackNagEvents" -> { args.optString("through").toLongOrNull()?.let { Engine.ack(app, it) }; reply(JSONObject()) }
             "nagScreen" -> {
                 main.removeCallbacks(lockAgain)
-                if (args.optBoolean("showing")) Engine.opened(app, strings(args.optJSONArray("keys")))
-                else context.showOverLock(false)
+                if (args.optBoolean("showing")) {
+                    val keys = strings(args.optJSONArray("keys"))
+                    screen = keys.toSet()
+                    Engine.opened(app, keys)
+                } else {
+                    screen = emptySet()
+                    context.showOverLock(false)
+                }
                 reply(JSONObject())
             }
             // The route shown over the lock screen is done (the celebration ended, "Agora não", the ring test answered):
@@ -130,7 +155,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     override fun paused() = front(false)
 
     private fun front(shown: Boolean) {
-        Bubble.appInFront = shown
+        Engine.appInFront = shown
+        if (!shown) main.removeCallbacks(openInFront)
         if (!context.agent) Engine.restore(app, front = shown)
     }
 
@@ -139,10 +165,11 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun destroy(done: () -> Unit) {
         main.removeCallbacks(lockAgain)
+        main.removeCallbacks(openInFront)
         previewStop(timedOut = false)
         accessibility()?.removeTouchExplorationStateChangeListener(touchExploration)
         // A module that goes after the next one was made leaves the activity's state to that one.
-        if (live?.get() === this) { live = null; Bubble.appInFront = false }
+        if (live?.get() === this) { live = null; Engine.appInFront = false }
         done()
     }
 
@@ -156,6 +183,30 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         if (!overLock() || !Engine.settled(app, keys)) return
         main.removeCallbacks(lockAgain)
         main.postDelayed(lockAgain, CELEBRATE_MAX_MS)
+    }
+
+    /**
+     * Decision 17: [groups] rang with the app in front, quietly (no heads-up, no full-screen intent). The nag rings on
+     * the nag screen, so the module opens the nag route as the full-screen intent opens it over the lock screen
+     * (`?via=fsi`: it rings until her first touch), [IN_FRONT_OPEN_MS] later, unless by then the nag screen shows one of
+     * its doses (she opened it herself, as "Ainda não" does), the ring stopped or was answered, or the app left the
+     * front.
+     */
+    private fun rangInFront(groups: List<String>) {
+        if (groups.isEmpty() || !context.resumed) return
+        inFront = groups
+        main.removeCallbacks(openInFront)
+        main.postDelayed(openInFront, IN_FRONT_OPEN_MS)
+    }
+
+    private fun openRang() {
+        val groups = inFront.also { inFront = emptyList() }
+        if (!context.resumed || !Engine.appInFront) return
+        val now = Engine.live(app) ?: return
+        val group = now.ringing.map { it.group }.filter { it in groups }.minOrNull() ?: return
+        if (now.plan.doses(group).any { it.key in screen }) return
+        val open = Shade.opening(app, now.plan, group, "fsi")
+        runCatching { (context.activity ?: return).startActivity(open) }.onFailure { android.util.Log.w("pinkoo.nag", "in front: $it") }
     }
 
     private fun keyguardLocked(): Boolean = app.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true

@@ -47,6 +47,10 @@ internal object Engine {
     @Volatile var clock: () -> Long = System::currentTimeMillis
     private fun now() = clock()
 
+    /** The app's activity is resumed: the module reads it when it is made and hears each resume and pause. In front,
+     * the bubble and the unlock stay away, and a loud nag rings on the nag screen with no heads-up over it ([fire]). */
+    @Volatile var appInFront = false
+
     /** What rings and waits now, or null with no plan yet. */
     @Synchronized fun live(c: Context): Live? = Store.plan(c)?.let { Live(it, Store.state(c)) }
 
@@ -109,7 +113,14 @@ internal object Engine {
         commit(c, plan, st, events, now)
     }
 
-    /** The alarm: lapses, the nags due, the low-stock notice on a day's first ring, the stale notice. */
+    /**
+     * The alarm: lapses, the nags due, the low-stock notice on a day's first ring, the stale notice.
+     *
+     * Decision 17: a nag that rings while the app is in front is quiet to its end ([State.quiet]): no heads-up and no
+     * full-screen intent, which over the app would only cover the nag screen; the ring plays as always, and the module
+     * opens the nag route itself ([NagModule.rang]), as the full-screen intent does over the lock screen. A nag that
+     * rings with the app in the background is loud as it always was, whatever happens after.
+     */
     @Synchronized fun fire(c: Context, now: Long = now()) {
         val (plan, st) = load(c, now) ?: return Chain.arm(c, null)
         val events = ArrayList<Event>()
@@ -118,15 +129,18 @@ internal object Engine {
         val stoppable = Shade.stoppable(c)
         if (stoppable) Rules.unmute(plan, st, now)
         val due = Rules.due(plan, st, now)
+        val front = appInFront
         if (due.isNotEmpty()) {
             if (stoppable) {
                 Rules.fire(plan, st, due, now, events)
+                if (front) st.quiet = st.nag
                 val today = WallClock.day(now)
                 if (plan.stock != null && st.stockDay != today) { st.stockDay = today; guard("stock") { Shade.post(c, Shade.STOCK, Shade.stock(c, plan)) } }
             } else Rules.mute(due)
         }
         if (Rules.stale(plan, st)?.let { it <= now } == true) { st.staleShown = st.planAt; guard("stale") { Shade.post(c, Shade.STALE, Shade.stale(c, plan)) } }
         commit(c, plan, st, events, now)
+        if (front && stoppable && due.isNotEmpty()) NagModule.rang(due.map { it.group }.sorted())
     }
 
     /** Nag [nag] ignored: by its "Not now", its ring timing out, the bubble closed, or its notification swiped. */

@@ -28,7 +28,7 @@ internal object Unlock : Nuisance {
                 override fun onReceive(context: Context, intent: Intent) {
                     val l = last ?: return
                     val lead = l.lead ?: return
-                    if (Bubble.appInFront) return
+                    if (Engine.appInFront) return
                     runCatching { app.startActivity(Shade.opening(app, l.plan, lead.group, "unlock")) }
                         .onFailure { android.util.Log.w("pinkoo.nag", "unlock: $it") }
                 }

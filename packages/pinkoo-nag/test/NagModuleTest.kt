@@ -96,7 +96,7 @@ internal class NagModuleTest : EngineCase() {
         val old = NagModule(ExtensionContext(app, "nag"))
         made()
         old.destroy {}
-        assertTrue(Bubble.appInFront)
+        assertTrue(Engine.appInFront)
     }
 
     /**
