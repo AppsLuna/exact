@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Looper
+import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import dev.exact.canvas.Activations
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
@@ -99,10 +101,10 @@ internal class NagModuleTest : EngineCase() {
 
     /**
      * Decision 5: confirmed over the lock screen (the full-screen nag showed the route over the keyguard), the route
-     * celebrates for about three seconds, then the keyguard covers the app again. Only once nothing of the nag is left:
-     * one medication confirmed of two keeps it; a new nag shown meanwhile keeps it too.
+     * celebrates as long as its celebration lasts, says when it ends, and the keyguard covers the app again then. Only
+     * once nothing of the nag is left: one medication confirmed of two keeps it; a new nag shown meanwhile keeps it too.
      */
-    @Test fun confirmedOverTheLockScreenTheKeyguardComesBackAfterTheCelebration() {
+    @Test fun confirmedOverTheLockScreenTheKeyguardComesBackWhenTheCelebrationEnds() {
         Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
         clock = at("2026-11-18T08:00")
         Engine.fire(app, clock)
@@ -112,13 +114,67 @@ internal class NagModuleTest : EngineCase() {
         made()
         send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf(pillA.getString("key"), pillB.getString("key")))))
         send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
-        idle(5_000)
+        idle(6_000)
         assertTrue("pill B is still to confirm", overLock)
         send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillB.getString("key")))).put("kind", "taken"))
-        idle(NagModule.CELEBRATE_MS - 100)
-        assertTrue("the celebration shows", overLock)
-        idle(200)
+        // The beads on the nag take about 4.3 s from the seal: longer than the old 3 s, so nothing cuts them now.
+        idle(4_300)
+        assertTrue("the celebration still shows", overLock)
+        val left = ask("leaveLockScreen", JSONObject().put("after", 0))
+        assertTrue("the route keeps its last frame: the keyguard is coming", left.getBoolean("locking"))
+        idle(1)
         assertFalse("the keyguard covers the app again", overLock)
+    }
+
+    /** A route that never says its celebration ended is covered at the cap, 5 s after the confirmation. */
+    @Test fun aCelebrationThatNeverEndsIsCoveredAtTheCap() {
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        clock = at("2026-11-18T08:00")
+        Engine.fire(app, clock)
+        serve()
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Activations.overLock(activity, true)
+        made()
+        send("resolveNags", keysOf(pillA).put("kind", "taken"))
+        idle(NagModule.CELEBRATE_MAX_MS - 100)
+        assertTrue(overLock)
+        idle(200)
+        assertFalse(overLock)
+        // Said late, after the cap: the keyguard is still on its way (Android lets the activity sleep first).
+        assertTrue(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
+    }
+
+    /**
+     * "Agora não" over the lock screen: the route says it is done and keeps its frame while the keyguard comes back
+     * (nothing of Today under it shows there). The wait asked is capped as a celebration is.
+     */
+    @Test fun leavingTheLockScreenHandsItBackToTheKeyguard() {
+        ringing()
+        clock += 10_000
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Activations.overLock(activity, true)
+        send("ignoreNags", keysOf(pillA))
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
+        assertTrue("an ignore leaves the nag open: nothing hands back by itself", overLock)
+        assertTrue(ask("leaveLockScreen", JSONObject().put("after", 60_000)).getBoolean("locking"))
+        idle(NagModule.CELEBRATE_MAX_MS - 100)
+        assertTrue(overLock)
+        idle(200)
+        assertFalse(overLock)
+    }
+
+    /** Unlocked (she unlocked over the nag, or it never showed over the keyguard), nothing is handed back: the route
+     * leaves as usual. */
+    @Test fun leavingWhenUnlockedChangesNothing() {
+        made()
+        Activations.overLock(activity, true)
+        assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
+        assertTrue(overLock)
+        // Locked, but the app not in front: nothing to hand back either.
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Extensions.paused()
+        assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
     }
 
     @Test fun aPromiseOverTheLockScreenGoesBackToItTooButNotWhenUnlocked() {
@@ -131,14 +187,14 @@ internal class NagModuleTest : EngineCase() {
         Activations.overLock(activity, true)
         made()
         send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "promised").put("until", clock + 600_000))
-        idle(NagModule.CELEBRATE_MS + 100)
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
         assertFalse(overLock)
         // Unlocked, nothing is dropped behind her back: the root clears the flags when the route closes.
         Activations.overLock(activity, true)
         keyguard.setKeyguardLocked(false)
         Engine.schedule(app, NagFixtures.plan(pillA, made = clock + 1), clock + 1)
         send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
-        idle(NagModule.CELEBRATE_MS + 100)
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
         assertTrue(overLock)
     }
 
@@ -153,7 +209,7 @@ internal class NagModuleTest : EngineCase() {
         send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
         idle(1_000)
         send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf("x@2026-11-18T08:01"))))
-        idle(NagModule.CELEBRATE_MS + 100)
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
         assertTrue(overLock)
     }
 
@@ -291,5 +347,88 @@ internal class NagModuleTest : EngineCase() {
         assertTrue(ignored().isEmpty())
         NagFixtures.clear(app)
         assertFalse(ask("ignoreNags", keysOf(pillA)).has("error"))
+    }
+
+    // MARK: the ring test ("Testar o toque"), the sound page and TalkBack
+
+    private fun preview(after: Long) = send("previewNag", JSONObject().put("rung", 0).put("after", after).put("title", "Ring test")
+        .put("body", "This is how I call you").put("route", "/settings/health"))
+    private fun previewShown() = nm.activeNotifications.firstOrNull { it.id == Shade.PREVIEW }
+
+    /**
+     * Decision: "Testar o toque" fires the real full-screen nag 5 s later, so she may lock the phone meanwhile. With the
+     * app not in front it is a loud notification on the nag channel whose full-screen intent opens the test's screen
+     * over the keyguard; it is never a dose: no event, no state, no alarm of the chain. Answered, it goes.
+     */
+    @Test fun theRingTestIsTheRealFullScreenNagFiveSecondsLaterAndNoDose() {
+        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+        val chain = alarms.nextAlarmClock?.triggerTime
+        val state = Store.state(app).groups.mapValues { it.value.state to it.value.ignores }
+        made()
+        Extensions.paused()
+        Extensions.stopped(false)
+        preview(5_000)
+        idle(4_900)
+        assertNull("not yet", previewShown())
+        idle(200)
+        val n = previewShown()
+        assertNotNull("the full-screen nag", n)
+        assertEquals(Shade.CH_NAG, n!!.notification.channelId)
+        assertEquals("its full-screen nag, where allowed", FullScreen.allowed(app), n.notification.fullScreenIntent != null)
+        assertNotNull("a tap opens it too", n.notification.contentIntent)
+        assertEquals(android.app.Notification.CATEGORY_ALARM, n.notification.category)
+        assertEquals("Ring test", n.notification.extras.getString(android.app.Notification.EXTRA_TITLE))
+        assertTrue("no event", Store.events(app).isEmpty())
+        assertEquals("no dose moved", state, Store.state(app).groups.mapValues { it.value.state to it.value.ignores })
+        assertEquals("the chain's alarm untouched", chain, alarms.nextAlarmClock?.triggerTime)
+        assertTrue("no nag notification", nags().isEmpty())
+        send("stopNagPreview", JSONObject())
+        assertNull("answered: it goes", previewShown())
+    }
+
+    /** With the app in front, the screen she is on shows the ring itself: only the ring, no notification over it. */
+    @Test fun withTheAppInFrontTheRingTestOnlyRings() {
+        made()
+        preview(5_000)
+        idle(5_100)
+        assertNull(previewShown())
+    }
+
+    /** Unanswered, the test rings out; over the lock screen the keyguard comes back then. Cancelled before it rings,
+     * nothing comes. */
+    @Test fun anUnansweredRingTestEndsByItselfAndACancelledOneNeverComes() {
+        made()
+        Extensions.paused()
+        preview(5_000)
+        idle(5_100)
+        assertNotNull(previewShown())
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Extensions.resumed()
+        Activations.overLock(activity, true)
+        idle(NagModule.PREVIEW_RING_MS)
+        assertNull(previewShown())
+        assertFalse("the keyguard covers it again", overLock)
+        Extensions.paused()
+        preview(5_000)
+        idle(1_000)
+        send("stopNagPreview", JSONObject())
+        idle(10_000)
+        assertNull(previewShown())
+    }
+
+    /** The ring test's "Didn't hear it" opens Android's sound settings. */
+    @Test fun soundOpensAndroidsSoundSettings() {
+        made()
+        send("requestNagAccess", JSONObject().put("what", "sound"))
+        idle(1)
+        assertEquals(Settings.ACTION_SOUND_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
+    }
+
+    /** With TalkBack on (touch exploration), the status says so: the app seals with one tap there. */
+    @Test fun theStatusSaysWhenTalkBackIsOn() {
+        made()
+        assertFalse(ask("nagStatus", JSONObject()).getBoolean("talkBack"))
+        shadowOf(app.getSystemService(AccessibilityManager::class.java)).setTouchExplorationEnabled(true)
+        assertTrue(ask("nagStatus", JSONObject()).getBoolean("talkBack"))
     }
 }

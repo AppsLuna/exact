@@ -106,6 +106,14 @@ class NagService : Service() {
             1 -> longArrayOf(0, 600, 500)
             else -> longArrayOf(0, 900, 250)
         }
+
+        /** [rung]'s vibration, repeating, as an alarm's (the ring test's too). */
+        internal fun vibrate(c: Context, rung: Int) {
+            val v = c.getSystemService(Vibrator::class.java) ?: return
+            val effect = VibrationEffect.createWaveform(pattern(rung), 0)
+            if (Build.VERSION.SDK_INT >= 33) v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+            else @Suppress("DEPRECATION") v.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -196,11 +204,9 @@ class NagService : Service() {
     }
 
     private fun vibrate(rung: Int) {
-        val v = getSystemService(Vibrator::class.java) ?: return
+        if (getSystemService(Vibrator::class.java) == null) return
         vibrating = rung
-        val effect = VibrationEffect.createWaveform(pattern(rung), 0)
-        if (Build.VERSION.SDK_INT >= 33) v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
-        else @Suppress("DEPRECATION") v.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+        vibrate(this, rung)
     }
 
     private fun silence() {

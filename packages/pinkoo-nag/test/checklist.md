@@ -7,10 +7,16 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
    `requestNagAccess("sleeping")` opens "Never sleeping apps"; add Pinkoo there and check the panel says so.
 2. **The full-screen nag on the lock screen.** Phone locked with a PIN, screen off: at the dose's time the nag route
    shows over the lock screen with the mascot and the medication's name, and the alarm plays. Leave it unanswered:
-   the next nag shows over the lock screen again, and so does the one after. Confirm a dose there: after a short
-   celebration the lock screen comes back. The engine hands the screen back 3 s after the confirmation; Android 16
-   then waits up to 5 s for the activity to sleep before the lock screen covers it (about 8 s in all on the emulator).
-   Note how long the phone takes.
+   the next nag shows over the lock screen again, and so does the one after. Confirm a dose there: the celebration
+   plays whole, then the lock screen comes back; nothing but the nag route shows over it meanwhile. The engine hands
+   the screen back when the route says its celebration ended (`leaveLockScreen`), at most 5 s after the
+   confirmation; Android 16 then waits up to 5 s for the activity to sleep before the lock screen covers it. Note how
+   long the phone takes. "Agora não" over the lock screen does the same, with its toast.
+9. **The ring test.** Tocar na hora › "Tocar em 5 segundos", then lock the phone: 5 s after the tap the screen turns on
+   with Pinkoo over the lock screen, ringing; "Ouvi!" stops it and the lock screen comes back. "Não ouvi" › "Abrir som
+   do Android" opens One UI's sound page.
+10. **TalkBack.** With TalkBack on, Ajustes shows "Segurar é difícil pra mim" on, and one double tap seals the pinky on
+   Today and on the nag.
 3. **The lock screen's notification.** With the phone locked, the nag notification shows the public text, without the
    name. One UI 7 and later show lock-screen notifications as icons by default: check with "Show content" on too.
 4. **Silent, vibrate and Do Not Disturb.** The ring plays on the alarm stream in each (DND lets alarms through by

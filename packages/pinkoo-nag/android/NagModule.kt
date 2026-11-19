@@ -22,9 +22,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -33,8 +33,15 @@ import java.lang.ref.WeakReference
 
 class NagModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
-        /** How long the nag route celebrates a confirmation over the lock screen before the keyguard covers it again. */
-        const val CELEBRATE_MS = 3_000L
+        /**
+         * The longest the nag route may celebrate a confirmation over the lock screen before the keyguard covers it
+         * again. The route says when its celebration ends (`leaveLockScreen`), which hands the screen back then; this is
+         * the cap, for a route that never says.
+         */
+        const val CELEBRATE_MAX_MS = 5_000L
+        /** The latest a ring test may be asked for, and how long its ring lasts unanswered. */
+        const val PREVIEW_AFTER_MAX_MS = 60_000L
+        const val PREVIEW_RING_MS = 20_000L
         @Volatile private var live: WeakReference<NagModule>? = null
         internal fun changed() { live?.get()?.let { it.context.changed("nag.nagState"); it.context.changed("nag.nagStatus") } }
     }
@@ -44,6 +51,17 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private val main = Handler(Looper.getMainLooper())
     /** The keyguard back over the app, unless she unlocked meanwhile. */
     private val lockAgain = Runnable { if (keyguardLocked()) context.showOverLock(false) }
+    /** The ring test's ring, due ([previewFire]) and then ringing until [previewEnd]. */
+    private var previewRung = 0
+    private var previewOpen: Intent? = null
+    private var previewTitle = ""
+    private var previewBody = ""
+    private var previewWake: PowerManager.WakeLock? = null
+    private var previewRinging = false
+    private val previewFire = Runnable { previewRing() }
+    private val previewEnd = Runnable { previewStop(timedOut = true) }
+    /** TalkBack (touch exploration) turned on or off: the status changes. */
+    private val touchExploration = AccessibilityManager.TouchExplorationStateChangeListener { changed() }
 
     init {
         if (!context.agent) {
@@ -51,6 +69,7 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             // Made at the first frame, after the activity resumed (a tap through the notification's alias, a launch):
             // no resume reaches this module for it, so it reads whether the activity is resumed now.
             front(context.resumed)
+            accessibility()?.addTouchExplorationStateChangeListener(touchExploration)
         }
     }
 
@@ -82,8 +101,25 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 else context.showOverLock(false)
                 reply(JSONObject())
             }
+            // The route shown over the lock screen is done (the celebration ended, "Agora não", the ring test answered):
+            // the keyguard comes back in `after` ms, at most the celebration's cap. Whether it will: the route then keeps
+            // its last frame, so what lies under it (Today) never shows over the lock screen.
+            "leaveLockScreen" -> {
+                val locking = !context.agent && overLock()
+                if (locking) {
+                    main.removeCallbacks(lockAgain)
+                    main.postDelayed(lockAgain, args.optDouble("after", 0.0).toLong().coerceIn(0, CELEBRATE_MAX_MS))
+                }
+                reply(JSONObject().put("locking", locking))
+            }
             "requestNagAccess" -> request(args.optString("what")) { reply(status()) }
-            "previewNag" -> { preview(args.optInt("rung")); reply(JSONObject()) }
+            "previewNag" -> {
+                if (context.agent) return reply(JSONObject())
+                preview(args.optInt("rung"), args.optDouble("after", 0.0).toLong(), args.optString("title"),
+                    args.optString("body"), args.optString("route"))
+                reply(JSONObject())
+            }
+            "stopNagPreview" -> { previewStop(timedOut = false); reply(JSONObject()) }
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
     }
@@ -103,6 +139,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun destroy(done: () -> Unit) {
         main.removeCallbacks(lockAgain)
+        previewStop(timedOut = false)
+        accessibility()?.removeTouchExplorationStateChangeListener(touchExploration)
         // A module that goes after the next one was made leaves the activity's state to that one.
         if (live?.get() === this) { live = null; Bubble.appInFront = false }
         done()
@@ -110,17 +148,23 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
 
     /**
      * Decision 5: [keys] confirmed (or promised) on the route the full-screen nag showed over the lock screen, and
-     * nothing of their nag left to do: the route celebrates for [CELEBRATE_MS], then the keyguard covers the app again.
-     * A new nag shown meanwhile (`nagScreen`) keeps it. The activity can be resumed under a locked keyguard only over
-     * it, which an over-lock activation alone allows.
+     * nothing of their nag left to do: the route celebrates, says when it ends (`leaveLockScreen`), and the keyguard
+     * covers the app again then, at the latest [CELEBRATE_MAX_MS] after the confirmation. A new nag shown meanwhile
+     * (`nagScreen`) keeps it.
      */
     private fun celebrate(keys: List<String>) {
-        if (!context.resumed || !keyguardLocked() || !Engine.settled(app, keys)) return
+        if (!overLock() || !Engine.settled(app, keys)) return
         main.removeCallbacks(lockAgain)
-        main.postDelayed(lockAgain, CELEBRATE_MS)
+        main.postDelayed(lockAgain, CELEBRATE_MAX_MS)
     }
 
     private fun keyguardLocked(): Boolean = app.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    /** The app shows over a locked keyguard: its activity can be resumed under one only over it, which an over-lock
+     * activation alone allows. */
+    private fun overLock(): Boolean = context.resumed && keyguardLocked()
+
+    private fun accessibility(): AccessibilityManager? = app.getSystemService(AccessibilityManager::class.java)
 
     private fun strings(a: JSONArray?): List<String> = (0 until (a?.length() ?: 0)).map { a!!.optString(it) }
 
@@ -163,6 +207,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             .put("standbyBucket", app.getSystemService(UsageStatsManager::class.java).appStandbyBucket)
             .put("alarmVolume", audio.getStreamVolume(AudioManager.STREAM_ALARM).toDouble() / max)
             .put("dndAllowsAlarms", dnd).put("maker", Build.MANUFACTURER ?: "")
+            // TalkBack (or any service exploring by touch): a hold is hard there, so the app seals with one tap.
+            .put("talkBack", accessibility()?.isTouchExplorationEnabled == true)
     }
 
     // MARK: the request: the one screen that grants [what], then the status
@@ -179,6 +225,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
             "promoted" -> if (LiveUpdate.platform()) Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName) else null
             "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            // The ring test's "Didn't hear it": Android's sound page (the alarm volume, Do Not Disturb, the sounds).
+            "sound" -> Intent(Settings.ACTION_SOUND_SETTINGS)
             // One UI's "Never sleeping apps" list (Samsung, "App management"); elsewhere the app's own settings.
             "sleeping" -> Intent("com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY").putExtra("activity_type", 2)
                 .takeIf { it.resolveActivity(app.packageManager) != null } ?: Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
@@ -191,18 +239,56 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    // MARK: the preview: five seconds of the rung's ring, for onboarding and the panel's test
+    // MARK: the ring test: the real full-screen nag, never a dose
 
-    private fun preview(rung: Int) {
+    /**
+     * "Testar o toque": in [after] ms (at most [PREVIEW_AFTER_MAX_MS]) the rung's ring and vibration, as a nag at
+     * [rung] rings them, and the full-screen nag as a real nag shows it: with the app not in front (the screen locked,
+     * off, or another app open) a loud notification ([title], [body]) whose full-screen intent opens [route] over the
+     * keyguard and turns the screen on; with the app in front, only the ring. It rings until `stopNagPreview` or for
+     * [PREVIEW_RING_MS]. Nothing is recorded and nothing climbs: no dose, no event, no alarm of the chain.
+     *
+     * The wait runs in the process, under a wake lock (the screen may go off meanwhile): a few seconds after her tap,
+     * neither Doze nor the freezer has come yet.
+     */
+    private fun preview(rung: Int, after: Long, title: String, body: String, route: String) {
+        previewStop(timedOut = false)
+        previewRung = rung
+        previewTitle = title
+        previewBody = body
+        previewOpen = Shade.openingAt(app, if (route.startsWith("/")) route else "/", overLock = true)
+        val wait = after.coerceIn(0, PREVIEW_AFTER_MAX_MS)
+        previewWake = app.getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pinkoo:preview")
+            ?.apply { acquire(wait + 2_000) }
+        main.postDelayed(previewFire, wait)
+    }
+
+    private fun previewRing() {
+        previewWake?.let { if (it.isHeld) it.release() }
+        previewWake = null
+        val plan = Store.plan(app)
+        preview = NagService.player(app, plan?.volume(previewRung) ?: 1.0)
+        previewRinging = true
+        NagService.vibrate(app, previewRung)
+        // In front, the screen she is on already shows the ring: a notification over it would only cover it.
+        if (!context.resumed) runCatching { Shade.preview(app, plan, previewTitle, previewBody, previewOpen) }
+            .onFailure { android.util.Log.w("pinkoo.nag", "preview: $it") }
+        main.postDelayed(previewEnd, PREVIEW_RING_MS)
+    }
+
+    /** The ring test ended: answered (`stopNagPreview`), left, or rung out. Rung out over the lock screen, nobody
+     * answered there: the keyguard covers the app again. */
+    private fun previewStop(timedOut: Boolean) {
+        main.removeCallbacks(previewFire)
+        main.removeCallbacks(previewEnd)
+        previewWake?.let { if (it.isHeld) it.release() }
+        previewWake = null
         preview?.runCatching { stop(); release() }
-        val volume = Store.plan(app)?.volume(rung) ?: 1.0
-        preview = NagService.player(app, volume)
-        app.getSystemService(Vibrator::class.java)?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 500, 500), 0))
-        Handler(Looper.getMainLooper()).postDelayed({
-            preview?.runCatching { stop(); release() }
-            preview = null
-            app.getSystemService(Vibrator::class.java)?.cancel()
-        }, 5_000)
+        preview = null
+        if (previewRinging) app.getSystemService(Vibrator::class.java)?.cancel()
+        previewRinging = false
+        runCatching { Shade.cancel(app, Shade.PREVIEW) }
+        if (timedOut && overLock()) context.showOverLock(false)
     }
 
 }

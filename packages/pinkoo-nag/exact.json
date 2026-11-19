@@ -98,7 +98,11 @@
       "standbyBucket": "number",
       "alarmVolume": "number",
       "dndAllowsAlarms": "bool",
-      "maker": "string"
+      "maker": "string",
+      "talkBack": "bool"
+    },
+    "NagLock": {
+      "locking": "bool"
     }
   },
   "names": [
@@ -120,7 +124,8 @@
           "standbyBucket": 10,
           "alarmVolume": 1,
           "dndAllowsAlarms": true,
-          "maker": ""
+          "maker": "",
+          "talkBack": false
         },
         "targets": {
           "web": {
@@ -136,7 +141,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "ios": {
             "available": false,
@@ -151,7 +157,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "macos": {
             "available": false,
@@ -166,7 +173,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "linux": {
             "available": false,
@@ -181,7 +189,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "tvos": {
             "available": false,
@@ -196,7 +205,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "windows": {
             "available": false,
@@ -211,7 +221,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           },
           "terminal": {
             "available": false,
@@ -226,7 +237,8 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": ""
+            "maker": "",
+            "talkBack": false
           }
         },
         "web": {
@@ -242,7 +254,8 @@
           "standbyBucket": 0,
           "alarmVolume": 0,
           "dndAllowsAlarms": false,
-          "maker": ""
+          "maker": "",
+          "talkBack": false
         }
       }
     },
@@ -360,12 +373,72 @@
       }
     },
     {
+      "send": "leaveLockScreen",
+      "permission": "none",
+      "options": {
+        "after": "number"
+      },
+      "answers": "NagLock",
+      "substitute": {
+        "unsupported": [
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ],
+        "default": {
+          "locking": false
+        }
+      }
+    },
+    {
       "send": "requestNagAccess",
       "permission": "none",
       "options": {
-        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping>"
+        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping|sound>"
       },
       "answers": "NagStatus",
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ],
+        "default": {
+          "available": true,
+          "notifications": "prompt",
+          "channelBlocked": false,
+          "exactAlarms": false,
+          "fullScreen": false,
+          "overlay": false,
+          "promoted": "unavailable",
+          "batteryUnrestricted": false,
+          "backgroundRestricted": false,
+          "standbyBucket": 10,
+          "alarmVolume": 1,
+          "dndAllowsAlarms": true,
+          "maker": "",
+          "talkBack": false
+        }
+      }
+    },
+    {
+      "send": "previewNag",
+      "permission": "none",
+      "options": {
+        "rung": "number",
+        "after": "number",
+        "title": "string",
+        "body": "string",
+        "route": "string"
+      },
+      "answers": null,
       "substitute": {
         "unsupported": [
           "web",
@@ -379,11 +452,9 @@
       }
     },
     {
-      "send": "previewNag",
+      "send": "stopNagPreview",
       "permission": "none",
-      "options": {
-        "rung": "number"
-      },
+      "options": {},
       "answers": null,
       "substitute": {
         "unsupported": [

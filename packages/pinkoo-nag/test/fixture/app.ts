@@ -73,7 +73,7 @@ const sources: Sources = {
     else if (what === 'leave') await nagScreen({ showing: false, keys: [] });
     else if (what === 'promised') await resolveNags({ keys, kind: 'promised', until: now + 90_000 });
     else if (what === 'ack') { const last = s.events.at(-1); if (last) await ackNagEvents({ through: last.id }); }
-    else if (what === 'preview') await previewNag({ rung: 1 });
+    else if (what === 'preview') await previewNag({ rung: 1, after: 0, title: 'Ring test', body: 'A preview', route: '/' });
     else await resolveNags({ keys, kind: 'taken' });
     return { text: `${what} ${keys.length}` };
   },

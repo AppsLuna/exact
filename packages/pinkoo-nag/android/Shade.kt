@@ -52,6 +52,8 @@ internal object Shade {
     const val STALE = NAG + 3
     /** The nag notification's other id ([nagId]). */
     const val NAG_ALT = NAG + 4
+    /** The ring test's full-screen nag ([preview]). */
+    const val PREVIEW = NAG + 5
     const val CH_NAG = "pinkoo.nag"
     const val CH_WAITING = "pinkoo.nag.waiting"
     const val CH_NOTICE = "pinkoo.nag.notice"
@@ -106,6 +108,10 @@ internal object Shade {
      * unlock's. */
     fun opening(c: Context, plan: Plan, group: String, via: String, action: String? = null, overLock: Boolean = false): Intent =
         ExtensionContext.activation(c, "nag", "", JSONArray(), route(plan, group, via, action), overLock)
+
+    /** The app at [route], the ring test's: over the keyguard when [overLock]. */
+    fun openingAt(c: Context, route: String, overLock: Boolean): Intent =
+        ExtensionContext.activation(c, "nag", "", JSONArray(), route, overLock)
 
     private fun activity(c: Context, code: Int, intent: Intent): PendingIntent =
         PendingIntent.getActivity(c, code, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -271,6 +277,25 @@ internal object Shade {
         .setContentTitle(plan.idle.title).setContentText(plan.idle.body).setAutoCancel(true)
         .setStyle(Notification.BigTextStyle().bigText(plan.idle.body))
         .setContentIntent(activity(c, 9, ExtensionContext.activation(c, "nag", "", JSONArray(), "/"))).build()
+
+    /**
+     * The ring test as a nag shows: loud (the alarm category, heads-up), its full-screen intent [open] over the
+     * keyguard when the full-screen nag is allowed, on the silent nag channel (the module plays the ring). Its own id,
+     * and nothing to swipe or answer: it goes when the test ends. [plan] names the channels when there is one.
+     */
+    fun preview(c: Context, plan: Plan?, title: String, body: String, open: Intent?) {
+        if (nm(c).getNotificationChannel(CH_NAG) == null) channels(c, plan?.texts ?: Texts(org.json.JSONObject()))
+        val b = Notification.Builder(c, CH_NAG).setSmallIcon(icon(c)).setColor(0xFFFF7A59.toInt())
+            .setContentTitle(title).setContentText(body).setStyle(Notification.BigTextStyle().bigText(body))
+            .setCategory(Notification.CATEGORY_ALARM).setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false)
+        if (open != null) {
+            b.setContentIntent(activity(c, 11, open))
+            if (FullScreen.allowed(c)) b.setFullScreenIntent(PendingIntent.getActivity(c, 12, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE), true)
+        }
+        plan?.let { p -> picture(c, p, 0)?.let { b.setLargeIcon(it) } }
+        notify(c, PREVIEW, b.build())
+    }
 
     fun post(c: Context, id: Int, n: Notification?) { if (n == null) cancel(c, id) else notify(c, id, n) }
 }
