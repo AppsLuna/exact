@@ -15,6 +15,7 @@ export function implementation() {
     async nagState() { return { doses: [], events: [] }; },
     scheduleNags: absent,
     resolveNags: absent,
+    ignoreNags: absent,
     ackNagEvents: absent,
     nagScreen: absent,
     requestNagAccess: absent,

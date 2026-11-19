@@ -302,6 +302,25 @@
       }
     },
     {
+      "send": "ignoreNags",
+      "permission": "none",
+      "options": {
+        "keys": "string[]"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
       "send": "ackNagEvents",
       "permission": "none",
       "options": {

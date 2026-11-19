@@ -103,6 +103,36 @@ class RulesTest {
         assertEquals(listOf("timeout"), ev.filter { it.kind == "ignored" }.map { it.reason })
     }
 
+    /**
+     * The nag screen's "Not now" names its doses (`ignoreNags`): the nag of their group takes its one ignore, as the
+     * app's `ignoreDose(group)` does; a group the same nag rang for but the screen does not show is left ringing.
+     */
+    @Test fun theNagScreensNotNowIgnoresItsOwnGroupOncePerNag() {
+        val other = NagFixtures.dose("b@2026-11-18T07:59", "2026-11-18T07:59", "2026-11-18T20:00", "Pill B")
+        val p = plan(pillA, other)
+        val st = State()
+        Rules.merge(p, st, 0)
+        val ev = ArrayList<Event>()
+        val nag = Rules.fire(p, st, Rules.due(p, st, at("2026-11-18T08:00"), sp), at("2026-11-18T08:00"), ev)
+        val a = st.groups.getValue("2026-11-18T08:00")
+        val b = st.groups.getValue("2026-11-18T07:59")
+        assertTrue(Rules.ignore(p, st, listOf(pillA.getString("key")), "notNow", at("2026-11-18T08:00") + 30_000, ev))
+        assertEquals(1, a.ignores)
+        assertEquals("pending", a.state)
+        assertEquals("the next nag counts from the ignore", at("2026-11-18T08:20") + 30_000, a.nextAt)
+        assertEquals("the other group rings on", "ringing", b.state)
+        assertEquals(0, b.ignores)
+        assertFalse("once per nag", Rules.ignore(p, st, listOf(pillA.getString("key")), "notNow", at("2026-11-18T08:00") + 40_000, ev))
+        assertFalse("a key the plan does not name counts nothing", Rules.ignore(p, st, listOf("x@2026-11-18T08:00"), "notNow", at("2026-11-18T08:00") + 45_000, ev))
+        assertEquals(at("2026-11-18T08:20") + 30_000, a.nextAt)
+        // The shade's "Not now" for the same nag then counts only for the group not yet ignored.
+        assertTrue(Rules.ignore(p, st, nag, "notNow", at("2026-11-18T08:00") + 50_000, ev))
+        assertEquals(1, a.ignores)
+        assertEquals(1, b.ignores)
+        assertEquals(listOf("a@2026-11-18T08:00" to "notNow", "b@2026-11-18T07:59" to "notNow"),
+            ev.filter { it.kind == "ignored" }.map { it.key to it.reason })
+    }
+
     @Test fun openingTheNagSilencesItWithoutClimbing() {
         val p = plan(pillA)
         val st = State()

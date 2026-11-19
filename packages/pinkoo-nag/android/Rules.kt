@@ -130,6 +130,17 @@ internal object Rules {
         return any
     }
 
+    /**
+     * The nags of [keys]' groups ignored by [reason]: the nag screen's "Not now", which shows one group, as the app's
+     * `ignoreDose(group)` counts it. Each group's nag takes one ignore, whatever ignored it first; another group the
+     * same nag rang for is left as it is.
+     */
+    fun ignore(plan: Plan, st: State, keys: Collection<String>, reason: String, now: Long, out: MutableList<Event>): Boolean {
+        var any = false
+        for (g in groupsOf(plan, st, keys)) if (ignored(plan, st, g, reason, now, out)) any = true
+        return any
+    }
+
     /** [g]'s nag ignored at [at], unless it was already: it climbs one rung, its next loud nag counted from [at]. */
     private fun ignored(plan: Plan, st: State, g: Group, reason: String, at: Long, out: MutableList<Event>): Boolean {
         if (g.nag == 0 || g.ignoredNag >= g.nag || (g.state != "ringing" && g.state != "pending")) return false

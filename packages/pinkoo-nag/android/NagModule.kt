@@ -73,6 +73,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 if (!context.agent) celebrate(keys)
                 reply(JSONObject())
             }
+            // The nag screen's "Not now": keys the engine does not know, or a nag already ignored, count nothing.
+            "ignoreNags" -> { Engine.ignoreKeys(app, strings(args.optJSONArray("keys"))); reply(JSONObject()) }
             "ackNagEvents" -> { args.optString("through").toLongOrNull()?.let { Engine.ack(app, it) }; reply(JSONObject()) }
             "nagScreen" -> {
                 main.removeCallbacks(lockAgain)

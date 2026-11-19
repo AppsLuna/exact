@@ -137,6 +137,19 @@ internal object Engine {
         commit(c, plan, st, events, now)
     }
 
+    /**
+     * "Not now" on the nag screen (`ignoreNags`) for [keys]: their nag's ignore if it was not ignored yet, counted
+     * from now, as the shade's "Not now" counts it. A ring that ran out unheard before it (nothing timed it out yet)
+     * was that ignore, at its end, as the app's catch-up counts it. Its ring stops; the notification stays, silent.
+     */
+    @Synchronized fun ignoreKeys(c: Context, keys: List<String>, now: Long = now()) {
+        val (plan, st) = load(c, now) ?: return
+        val events = ArrayList<Event>()
+        Rules.ringOut(plan, st, now, events)
+        Rules.ignore(plan, st, keys, "notNow", now, events)
+        commit(c, plan, st, events, now)
+    }
+
     /** The nag notification swiped away: the nag's ignore if it was not ignored yet. It comes back at once, silent,
      * while the returning notification is on; otherwise it stays away until the next nag. */
     @Synchronized fun dismissed(c: Context, nag: Int, now: Long = now()) {
