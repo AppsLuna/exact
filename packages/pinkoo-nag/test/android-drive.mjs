@@ -413,7 +413,11 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       sh('dumpsys battery reset');
       sh('input keyevent KEYCODE_WAKEUP');
       sh('wm dismiss-keyguard');
-      const wakeups = /Wakeup alarm/.test(stats), locks = /Wake lock .*pinkoo/i.test(stats);
+      // Only the fixture's own block counts (`u0a214:` up to the next uid's): another app's periodic job may wake
+      // the phone in the same five minutes (Settings' battery job did, 2026-11-19).
+      const app = `u0a${Number(uid) - 10000}:`;
+      const own = stats.includes(app) ? stats.slice(stats.indexOf(app)).split(/\n  (?:u0a\d+|\d+):\n|\n\n/)[0] : stats;
+      const wakeups = /Wakeup alarm/.test(own), locks = /Wake lock .*pinkoo/i.test(stats) || /Wake lock/.test(own);
       check('android', 'idle: no wakeup alarm, no wake lock, the process never started', !wakeups && !locks && !pid(), `uid ${uid}`);
       launch();
       await press('Take');
