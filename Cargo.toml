@@ -146,6 +146,32 @@ opt-level = 3
 [profile.dev.package.exact-forma]
 opt-level = 3
 
+# pinkoo: the Contract compiler and the web codegen an app's every build and
+# test runs through. Unoptimized, `contract build` of the Pinkoo app (~650 KB
+# plan) took 181 s of one core, and parallel agents each paid it per edit.
+[profile.dev.package.contract]
+opt-level = 3
+[profile.dev.package.contract-analyze]
+opt-level = 3
+[profile.dev.package.contract-checking]
+opt-level = 3
+[profile.dev.package.contract-lower]
+opt-level = 3
+[profile.dev.package.contract-syntax]
+opt-level = 3
+[profile.dev.package.contract-types]
+opt-level = 3
+[profile.dev.package.exact-plan]
+opt-level = 3
+[profile.dev.package.exact-kernel]
+opt-level = 3
+[profile.dev.package.exact-runner]
+opt-level = 3
+[profile.dev.package.exact-web-js]
+opt-level = 3
+[profile.dev.package.exact-web]
+opt-level = 3
+
 # Development native builds — an Apple app (`host/apple/build.mjs` unless the
 # trust is production), the Linux host an agent drives (`cargo build --profile
 # host-dev -p caltrain-linux`) and an app's render entry at build time:
