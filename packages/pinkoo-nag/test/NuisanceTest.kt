@@ -79,7 +79,7 @@ internal class NuisanceTest : EngineCase() {
         Engine.fire(app, clock)
         serve()
         assertEquals("ringing", group().state)
-        assertEquals("the same rung", 3, Rules.rung(Store.plan(app)!!, group()))
+        assertEquals("the same rung", 3, Rules.rung(Store.plan(app)!!, Store.state(app), group()))
         assertTrue(Bubble.shown)
         assertTrue(listensToUnlock())
     }

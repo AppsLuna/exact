@@ -11,7 +11,9 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
    plays whole, then the lock screen comes back; nothing but the nag route shows over it meanwhile. The engine hands
    the screen back when the route says its celebration ended (`leaveLockScreen`), at most 5 s after the
    confirmation; Android 16 then waits up to 5 s for the activity to sleep before the lock screen covers it. Note how
-   long the phone takes. "Agora não" over the lock screen does the same, with its toast.
+   long the phone takes. "Agora não" over the lock screen does the same, with its toast. With two medications at the
+   same time, promise the first there: the route moves on to the second and the lock screen stays away until it is
+   answered too (one pinky promise per medication).
 9. **The ring test.** Tocar na hora › "Tocar em 5 segundos", then lock the phone: 5 s after the tap the screen turns on
    with Pinkoo over the lock screen, ringing; "Ouvi!" stops it and the lock screen comes back. "Não ouvi" › "Abrir som
    do Android" opens One UI's sound page.
@@ -26,8 +28,9 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
    nag changes nothing. At the third rung the bubble shows over other apps and hides when Pinkoo is in front; dragging
    it onto the cross closes it until the next nag, even if One UI ends the app meanwhile. Tapping the notification
    while the bubble shows opens Pinkoo with no bubble over it. At the fourth rung each unlock opens the nag route (One
-   UI's background activity starts with "Display over other apps"). While a pinky promise runs, neither the bubble nor
-   the unlock comes; at its deadline the nag is back at the same rung, with them.
+   UI's background activity starts with "Display over other apps"). While a pinky promise runs (on every dose due at
+   that time), neither the bubble nor the unlock comes; at its deadline the nag is back at the same rung, with them. A
+   promise on one of two doses leaves the other nagging on its own ladder.
 6. **The promise as a Live Update.** A pinky promise shows the deadline in the Now Bar and the status-bar chip, counting
    down. Dismissing it does not bring it back for that promise and counts no ignore.
 7. **Reboot and force-stop.** Restart the phone mid-ladder: the next nag comes on time, before and after the first

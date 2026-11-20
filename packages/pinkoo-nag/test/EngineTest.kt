@@ -316,4 +316,49 @@ internal class EngineTest : EngineCase() {
         assertTrue("unique and rising, from above any id a state before could have handed out", ids[0] > at("2026-11-18T07:00") && ids[1] == ids[0] + 1)
         assertTrue(JSONObject(Store.events(app).last().json().toString()).isNull("reason"))
     }
+
+    /**
+     * "One pinky promise per medication": a promise on one of two doses due together leaves the other nagging. Its
+     * notification waits, named for the other alone; the promise's countdown is the promised one's; her "Agora não" on
+     * the other counts; the alarm is the other's next nag, then the deadline, which rings for both.
+     */
+    @Test fun aPromiseOnOneOfTwoDosesLeavesTheOtherNagging() {
+        val pillB = NagFixtures.dose("b@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T20:00", "Pill B")
+        val keys = listOf(pillA.getString("key"), pillB.getString("key"))
+        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
+        clock = at("2026-11-18T08:00")
+        Engine.fire(app, clock)
+        serve()
+        clock += 20_000
+        Engine.opened(app, keys, clock)
+        Engine.resolve(app, keys.take(1), "promised", at("2026-11-18T08:30"), clock)
+        assertEquals("pending", group().state)
+        assertFalse("the other dose is left to answer", Engine.settled(app, keys.take(1)))
+        assertEquals("Pill B waits", nag()!!.notification.extras.getString(Notification.EXTRA_TITLE))
+        val promise = posted(Shade.PROMISE)!!
+        assertTrue(promise.extras.getString(Notification.EXTRA_TITLE)!!.startsWith("Pill A by "))
+        assertEquals(at("2026-11-18T08:30"), promise.`when`)
+        assertEquals("the other's next nag, counted from the opening", clock + 20 * 60_000L, alarms.nextAlarmClock.triggerTime)
+        clock += 1_000
+        Engine.ignoreKeys(app, keys, clock)
+        assertEquals(1, group().ignores)
+        assertEquals(listOf(pillB.getString("key")), Store.events(app).filter { it.kind == "ignored" }.map { it.key })
+        assertEquals(clock + 20 * 60_000L, alarms.nextAlarmClock.triggerTime)
+        clock += 20 * 60_000L
+        Engine.fire(app, clock)
+        serve()
+        assertEquals("Time for Pill B", nag()!!.notification.extras.getString(Notification.EXTRA_TITLE))
+        Engine.ignore(app, group().nag, "notNow", clock + 1_000)
+        assertEquals("the deadline, before the next nag", at("2026-11-18T08:30"), alarms.nextAlarmClock.triggerTime)
+        clock = at("2026-11-18T08:30")
+        Engine.fire(app, clock)
+        serve()
+        assertEquals("ringing", group().state)
+        assertEquals("Time for Pill A, Pill B", nag()!!.notification.extras.getString(Notification.EXTRA_TITLE))
+        assertNull("no promise left", posted(Shade.PROMISE))
+        Engine.resolve(app, keys, "promised", at("2026-11-18T08:40"), clock + 5_000)
+        assertEquals("both promised: the group waits", "promised", group().state)
+        assertTrue(Engine.settled(app, keys.take(1)))
+        assertNull(nag())
+    }
 }

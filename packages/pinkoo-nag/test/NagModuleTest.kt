@@ -198,6 +198,30 @@ internal class NagModuleTest : EngineCase() {
         assertTrue(overLock)
     }
 
+    /**
+     * Two doses over the lock screen: a promise on the first leaves the second to answer, so the keyguard stays away
+     * while the route moves on to it (the review's lock-screen run: it came back ~10 s after the promise, with the
+     * other dose unanswered). Answering the second hands the screen back.
+     */
+    @Test fun aPromiseOnOneOfTwoDosesOverTheLockScreenKeepsTheRouteForTheOther() {
+        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
+        clock = at("2026-11-18T08:00")
+        Engine.fire(app, clock)
+        serve()
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Activations.overLock(activity, true)
+        made()
+        send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf(pillA.getString("key"), pillB.getString("key")))))
+        send("resolveNags", keysOf(pillA).put("kind", "promised").put("until", clock + 600_000))
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
+        assertTrue("the other dose is still open: the route stays over the lock screen", overLock)
+        assertEquals("pending", group().state)
+        send("resolveNags", keysOf(pillB).put("kind", "taken"))
+        idle(NagModule.CELEBRATE_MAX_MS + 100)
+        assertFalse("nothing of that nag left: the keyguard comes back", overLock)
+        assertEquals("promised", group().state)
+    }
+
     @Test fun aNewNagShownDuringTheCelebrationKeepsTheRouteOverTheLockScreen() {
         Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
         clock = at("2026-11-18T08:00")

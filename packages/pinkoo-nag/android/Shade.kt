@@ -32,23 +32,29 @@ internal class Live(val plan: Plan, val st: State) {
     private val open = st.groups.values.filter { Rules.open(plan, st, it).isNotEmpty() }
     val ringing = open.filter { it.state == "ringing" }
     val waiting = open.filter { it.state == "pending" }
-    val promised = open.filter { it.state == "promised" }
+    /** The open doses under a pinky promise, each its own: the promise's notification counts down to the earliest
+     * deadline, while the other doses of their groups keep nagging. */
+    val promised: List<Dose> = Rules.promised(plan, st)
+    /** The earliest promise deadline, and the dose it is for. */
+    val promiseUntil: Long? = promised.mapNotNull { Rules.until(st, it) }.minOrNull()
+    val promiseLead: Dose? = promised.minByOrNull { Rules.until(st, it) ?: Long.MAX_VALUE }
     /** Ringing and waiting: what the nag notification shows. */
     val groups = ringing + waiting
     val nag = groups.maxOfOrNull { it.nag } ?: 0
-    val rung = groups.maxOfOrNull { Rules.rung(plan, it) } ?: 0
+    val rung = groups.maxOfOrNull { Rules.rung(plan, st, it) } ?: 0
     /** The ring's rung: its volume and vibration. */
-    val ringingRung = ringing.maxOfOrNull { Rules.rung(plan, it) } ?: 0
+    val ringingRung = ringing.maxOfOrNull { Rules.rung(plan, st, it) } ?: 0
     /** Every nuisance the live groups' rungs have. */
-    val words: Set<String> = groups.flatMap { plan.words(Rules.rung(plan, it)) }.toSet()
+    val words: Set<String> = groups.flatMap { plan.words(Rules.rung(plan, st, it)) }.toSet()
     /** The group the nag opens at: the one ringing, else the one waiting longest. */
     val lead: Group? = ringing.firstOrNull() ?: groups.minByOrNull { it.group }
     /** The nag rang with the app in front (decision 17): no heads-up and no full-screen intent, to its end. */
     val quiet: Boolean = nag != 0 && nag == st.quiet
     /** The lead group's rung: the mascot the notification and the bubble show, as the nag route they open does. */
-    val face: Int = lead?.let { Rules.rung(plan, it) } ?: 0
+    val face: Int = lead?.let { Rules.rung(plan, st, it) } ?: 0
 
-    fun names(gs: List<Group>): String = gs.flatMap { Rules.open(plan, st, it) }.map { it.name }.distinct().joinToString(", ")
+    /** The names the nag of [gs] is for: their doses under no promise. */
+    fun names(gs: List<Group>): String = gs.flatMap { Rules.nagged(plan, st, it) }.map { it.name }.distinct().joinToString(", ")
 }
 
 internal object Shade {
@@ -251,14 +257,14 @@ internal object Shade {
      * Dismissing it is no ignore; it is not shown again for that promise. Posted only when it changed. */
     fun promise(c: Context, live: Live) {
         val plan = live.plan
-        val until = live.promised.mapNotNull { it.until }.minOrNull()
+        val until = live.promiseUntil
+        val lead = live.promiseLead
         val there = showing(c)
-        if (until == null || live.st.promiseDismissed == until) {
+        if (until == null || lead == null || live.st.promiseDismissed == until) {
             if (synchronized(shown) { shown.containsKey(PROMISE) } || there.any { it.id == PROMISE }) cancel(c, PROMISE)
             return
         }
-        val lead = live.promised.minByOrNull { it.until ?: Long.MAX_VALUE }!!
-        val names = live.names(live.promised)
+        val names = live.promised.map { it.name }.distinct().joinToString(", ")
         val title = fill(c, plan.texts.promiseChip, names, until)
         val on = Nuisances.all.filter { Nuisances.on(c, it, live) }.map { it.word }
         put(c, PROMISE, listOf(title, until, lead.group, on, plan.made).toString(), false, there, { id, n -> notify(c, id, n) }) {

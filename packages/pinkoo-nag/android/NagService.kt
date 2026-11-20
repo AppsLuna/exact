@@ -184,7 +184,7 @@ class NagService : Service() {
     }
 
     private fun ring(live: Live) {
-        if (live.ringing.isEmpty() || "ring" !in live.ringing.flatMap { live.plan.words(Rules.rung(live.plan, it)) }) { silence(); return }
+        if (live.ringing.isEmpty() || "ring" !in live.ringing.flatMap { live.plan.words(Rules.rung(live.plan, live.st, it)) }) { silence(); return }
         val volume = live.plan.volume(live.ringingRung)
         if (player == null) play(volume) else if (volume != playing) player?.setVolume(volume.toFloat(), volume.toFloat())
         playing = volume

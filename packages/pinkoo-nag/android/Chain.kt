@@ -56,7 +56,7 @@ internal object Engine {
     @Volatile var screen: Set<String> = emptySet()
 
     /** What rings and waits now, or null with no plan yet. */
-    @Synchronized fun live(c: Context): Live? = Store.plan(c)?.let { Live(it, Store.state(c)) }
+    @Synchronized fun live(c: Context): Live? = Store.plan(c)?.let { p -> Live(p, Store.state(c).also { Rules.upgrade(p, it) }) }
 
     /** The plan and the state every way in starts from; a state lost with its file goes on from the plan
      * ([Rules.recover]). Null with no plan. */
@@ -64,10 +64,12 @@ internal object Engine {
         val plan = Store.plan(c) ?: return null
         val st = Store.state(c)
         if (st.fresh && st.groups.isEmpty()) Rules.recover(plan, st, now)
+        Rules.upgrade(plan, st)
         return plan to st
     }
 
-    /** Whether nothing of [keys]' nags is left to do now: each of their groups resolved or promised. */
+    /** Whether nothing of [keys]' nags is left to do now: each of their groups resolved, or promised whole (every open
+     * dose of it under a promise, which is per dose). A promise on one dose leaves the others of its nag to answer. */
     @Synchronized fun settled(c: Context, keys: List<String>): Boolean {
         val plan = Store.plan(c) ?: return true
         val st = Store.state(c)
@@ -79,6 +81,7 @@ internal object Engine {
      * read is refused, and the last one kept: it is read before it is stored. */
     @Synchronized fun schedule(c: Context, plan: JSONObject, now: Long = now()): Boolean {
         val st = Store.state(c)
+        Store.plan(c)?.let { Rules.upgrade(it, st) }
         val hash = JSONObject(plan.toString()).apply { remove("made") }.toString().hashCode()
         val parsed = (if (hash == st.planHash) Store.plan(c) else null) ?: run {
             val read = runCatching { Plan.parse(plan) }.onFailure { Log.e(TAG, "plan refused", it) }.getOrNull() ?: return false
@@ -145,7 +148,7 @@ internal object Engine {
                 st.front = if (front && due.none { g -> plan.doses(g.group).any { it.key in shown } }) st.nag else 0
                 val today = WallClock.day(now)
                 if (plan.stock != null && st.stockDay != today) { st.stockDay = today; guard("stock") { Shade.post(c, Shade.STOCK, Shade.stock(c, plan)) } }
-            } else Rules.mute(due)
+            } else Rules.mute(plan, st, due, now)
         }
         if (Rules.stale(plan, st)?.let { it <= now } == true) { st.staleShown = st.planAt; guard("stale") { Shade.post(c, Shade.STALE, Shade.stale(c, plan)) } }
         commit(c, plan, st, events, now)

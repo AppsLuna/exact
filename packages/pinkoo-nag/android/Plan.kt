@@ -13,9 +13,18 @@ internal class Ladder(val firstMin: Int, val repeatMin: Int, val ringSec: Int)
 /** A rung: reached at [ignores] ignores, it adds the nuisances [add] names. */
 internal class Rung(val ignores: Int, val add: List<String>)
 
-/** One dose: [group] is its scheduled local time (`2026-11-18T08:00`), shared by every dose due then; [miss] the local
- * time it becomes missed; [lineSeed] where its mascot lines start rotating. */
-internal class Dose(val key: String, val group: String, val name: String, val miss: String, val promiseUntil: Long?, val lineSeed: Long)
+/**
+ * One dose: [group] is its scheduled local time (`2026-11-18T08:00`), shared by every dose due then; [miss] the local
+ * time it becomes missed, with the offset the app knows it at when it sends one (`2026-11-01T01:00-05:00`); [lineSeed]
+ * where its mascot lines start rotating.
+ */
+internal class Dose(val key: String, val group: String, val name: String, val miss: String, val promiseUntil: Long?, val lineSeed: Long) {
+    private val offset: java.time.OffsetDateTime? = runCatching { java.time.OffsetDateTime.parse(miss) }.getOrNull()
+    /** [miss]'s instant, when it carries its offset. */
+    val missAt: Long? = offset?.toInstant()?.toEpochMilli()
+    /** [miss]'s local time alone. */
+    val missLocal: String = offset?.toLocalDateTime()?.toString() ?: miss
+}
 
 internal class Texts(private val o: JSONObject) {
     private fun s(k: String) = o.optString(k)
@@ -42,7 +51,22 @@ internal class Idle(val afterDays: Int, val title: String, val body: String)
 internal class Plan(
     val made: Long, val ladder: Ladder, val rungs: List<Rung>, val liveUpdate: Boolean, val volume: List<Double>,
     val doses: List<Dose>, val texts: Texts, val mascot: Mascot?, val mascots: List<Mascot>, val stock: Stock?, val idle: Idle,
+    /** The zone the app built the plan in (IANA), '' when it did not say. */
+    val zone: String = "",
 ) {
+    private val madeIn: ZoneId? by lazy { runCatching { ZoneId.of(zone) }.getOrNull() }
+
+    /**
+     * When [d] becomes missed in [now]'s zone: the instant its offset names while the phone is still in the zone the
+     * plan was made in, since a local time in a daylight-saving overlap names two instants (the second 01:00 of a
+     * fall-back night, read with the earlier offset, would stop the nag an hour before the app makes the dose missed);
+     * in another zone (a trip), or with no offset, its local time there, as every dose's time.
+     */
+    fun miss(d: Dose, now: ZoneId = ZoneId.systemDefault()): Long {
+        val at = d.missAt
+        return if (at != null && madeIn?.let { it == now || it.rules == now.rules } == true) at else WallClock.epoch(d.missLocal, now)
+    }
+
     /** The app's route for a group's nag. */
     val route = "/nag/{group}"
 
@@ -82,13 +106,13 @@ internal class Plan(
             val doses = objects(o.optJSONArray("doses")).map { d ->
                 Dose(d.optString("key"), d.optString("group"), d.optString("name"), d.optString("miss"),
                     if (d.isNull("promiseUntil")) null else d.optLong("promiseUntil"), d.optLong("lineSeed"))
-            }.filter { it.key.isNotEmpty() && WallClock.valid(it.group) && WallClock.valid(it.miss) }
+            }.filter { it.key.isNotEmpty() && WallClock.valid(it.group) && WallClock.valid(it.missLocal) }
             val stock = o.optJSONObject("stock")?.let { Stock(it.optString("title"), it.optString("body")) }
             val idle = o.optJSONObject("idle").let { Idle(it?.optInt("afterDays", 6)?.coerceIn(1, 366) ?: 6, it?.optString("title") ?: "", it?.optString("body") ?: "") }
             val mascots = whole(o.opt("mascots")).let { m -> if (m is JSONArray) objects(m).map(Mascot::parse) else emptyList() }
             return Plan(o.optLong("made"), ladder, rungs.ifEmpty { listOf(Rung(0, listOf("ring", "fullScreen"))) },
                 o.optBoolean("liveUpdate", true), volume, doses, Texts(o.optJSONObject("texts") ?: JSONObject()),
-                (whole(o.opt("mascot")) as? JSONObject)?.let(Mascot::parse), mascots, stock, idle)
+                (whole(o.opt("mascot")) as? JSONObject)?.let(Mascot::parse), mascots, stock, idle, o.optString("zone"))
         }
 
         /** A value passed whole (`json<…>`): the object itself, or its JSON text. */

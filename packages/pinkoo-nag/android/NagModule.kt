@@ -156,7 +156,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
      * Decision 5: [keys] confirmed (or promised) on the route the full-screen nag showed over the lock screen, and
      * nothing of their nag left to do: the route celebrates, says when it ends (`leaveLockScreen`), and the keyguard
      * covers the app again then, at the latest [CELEBRATE_MAX_MS] after the confirmation. A new nag shown meanwhile
-     * (`nagScreen`) keeps it.
+     * (`nagScreen`) keeps it. A promise is one dose's: while another dose of the nag is open and not promised, the
+     * route goes on to it and the keyguard stays away ([Engine.settled]).
      */
     private fun celebrate(keys: List<String>) {
         if (!overLock() || !Engine.settled(app, keys)) return
@@ -186,10 +187,11 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
      * Decision 7: the nag that rang with the app in front and the nag screen has not shown yet. The app opens `route`
      * (`?via=fsi`: it rings there until her first touch) at once, or shows a banner while she is in a form and opens it
      * when she leaves; showing one of its doses (`nagScreen`) clears it. `nag` is new for every loud nag, so the app acts
-     * once per nag; `keys` and `names` are the lead group's open doses, `at` when it rang.
+     * once per nag; `keys` and `names` are the lead group's open doses under no promise (the ones it rang for), `at`
+     * when it rang.
      */
     private fun front(plan: Plan, st: State): JSONObject? = Rules.front(plan, st)?.let { g ->
-        val doses = Rules.open(plan, st, g)
+        val doses = Rules.nagged(plan, st, g)
         JSONObject().put("nag", st.front).put("group", g.group).put("route", Shade.route(plan, g.group, "fsi"))
             .put("keys", JSONArray(doses.map { it.key })).put("names", JSONArray(doses.map { it.name }.distinct()))
             .put("at", g.lastFiredAt ?: 0L)

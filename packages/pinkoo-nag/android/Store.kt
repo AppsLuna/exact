@@ -12,7 +12,8 @@ import java.io.FileOutputStream
 /** A group's place on the ladder: one nag, one ring and one ignore count for every dose due at the same time. */
 internal class Group(
     val group: String,
-    /** `upcoming`, `ringing`, `pending`, `promised` or `done`. */
+    /** `upcoming`, `ringing`, `pending`, `promised` (every open dose of it under a promise, [until] the earliest
+     * deadline) or `done`. */
     var state: String = "upcoming",
     var ignores: Int = 0,
     /** The last nag (a fire's number) the group rang in, and the last one counted as ignored. */
@@ -33,10 +34,17 @@ internal class Group(
     }
 }
 
-/** A dose's own outcome: `open`, `resolved` (taken, skipped) or `lapsed` (missed). */
-internal class DoseState(val key: String, var state: String = "open", var at: Long? = null) {
+/**
+ * A dose's own outcome: `open`, `resolved` (taken, skipped) or `lapsed` (missed). While open, [until] is its pinky
+ * promise's deadline (one per medication: the group's other doses keep nagging), and [behind] the group's ignores it sat
+ * out under promises, so it comes back at its own rung.
+ */
+internal class DoseState(val key: String, var state: String = "open", var at: Long? = null, var until: Long? = null, var behind: Int = 0) {
     fun json(): JSONObject = JSONObject().put("key", key).put("state", state).put("at", at ?: JSONObject.NULL)
-    companion object { fun from(o: JSONObject) = DoseState(o.getString("key"), o.optString("state", "open"), long(o, "at")) }
+        .put("until", until ?: JSONObject.NULL).put("behind", behind)
+    companion object {
+        fun from(o: JSONObject) = DoseState(o.getString("key"), o.optString("state", "open"), long(o, "at"), long(o, "until"), o.optInt("behind"))
+    }
 }
 
 internal class State(
@@ -67,19 +75,23 @@ internal class State(
     var front: Int = 0,
     /** Made anew, not read: there was no state file, or it could not be read. Not kept. */
     val fresh: Boolean = false,
+    /** The state's version: 2 since promises are per dose ([Rules.upgrade] brings a 1 up). */
+    var v: Int = VERSION,
 ) {
-    fun json(): JSONObject = JSONObject().put("v", 1)
+    fun json(): JSONObject = JSONObject().put("v", v)
         .put("groups", JSONArray(groups.values.map { it.json() })).put("doses", JSONArray(doses.values.map { it.json() }))
         .put("nag", nag).put("event", event).put("planHash", planHash).put("planAt", planAt).put("staleShown", staleShown)
         .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed).put("bubbleClosed", bubbleClosed)
         .put("quiet", quiet).put("front", front)
 
     companion object {
+        const val VERSION = 2
+
         fun from(o: JSONObject): State {
             val s = State(nag = o.optInt("nag"), event = o.optLong("event"), planHash = o.optInt("planHash"), planAt = o.optLong("planAt"),
                 staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), swiped = o.optInt("swiped"),
                 promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"), quiet = o.optInt("quiet"),
-                front = o.optInt("front"))
+                front = o.optInt("front"), v = o.optInt("v", 1))
             o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) Group.from(a.getJSONObject(i)).let { s.groups[it.group] = it } }
             o.optJSONArray("doses")?.let { a -> for (i in 0 until a.length()) DoseState.from(a.getJSONObject(i)).let { s.doses[it.key] = it } }
             return s
