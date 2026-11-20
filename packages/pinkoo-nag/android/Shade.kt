@@ -132,7 +132,10 @@ internal object Shade {
         Intent(c, NagReceiver::class.java).setAction(action).putExtra("nag", nag).putExtra("at", at),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-    fun time(c: Context, at: Long): String = android.text.format.DateFormat.getTimeFormat(c).format(java.util.Date(at))
+    /** A time in the notification's words: always 24 h ("12:10", never "12:10 PM"), as the app writes every time,
+     * whatever the phone's 12/24 setting. */
+    fun time(@Suppress("UNUSED_PARAMETER") c: Context, at: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(at))
 
     private fun fill(c: Context, template: String, names: String, at: Long?): String =
         template.replace("{names}", names).replace("{time}", at?.let { time(c, it) } ?: "")

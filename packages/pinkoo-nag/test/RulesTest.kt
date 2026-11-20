@@ -179,6 +179,18 @@ class RulesTest {
         assertTrue(Rules.stale(Plan.parse(o), st)!! > st.planAt)
     }
 
+    /** No medication left (all removed, the data erased, a phone that only watches): the app sends idle days 0, and
+     * no "open Pinkoo" notice is armed, since no reminder can run out. */
+    @Test fun noStaleNoticeWhenThePlanHasNoScheduleLeft() {
+        val o = NagFixtures.plan()
+        o.getJSONObject("idle").put("afterDays", 0)
+        val p = Plan.parse(o)
+        val st = State(planAt = at("2026-11-18T07:00"))
+        assertNull(Rules.stale(p, st))
+        Rules.merge(p, st, 0)
+        assertNull("no alarm at all", Rules.next(p, st, sp))
+    }
+
     @Test fun aPromiseMovesTheNextNagToItsDeadlineCappedAtTheMiss() {
         val p = plan(pillA)
         val st = State()

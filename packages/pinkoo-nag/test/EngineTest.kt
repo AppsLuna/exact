@@ -259,12 +259,15 @@ internal class EngineTest : EngineCase() {
     }
 
     @Test fun aPromiseCountsDownAndOnceDismissedIsNotShownAgain() {
+        // A phone set to 12 h: the notification still says 24 h, as the app does.
+        android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, "12")
         Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
         Engine.fire(app, at("2026-11-18T08:00"))
         NagService.running = null
         Engine.resolve(app, listOf(pillA.getString("key")), "promised", at("2026-11-18T08:20"), at("2026-11-18T08:01"))
         val n = posted(Shade.PROMISE)!!
         assertTrue(n.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
+        assertTrue("24 h: ${n.extras.getCharSequence(Notification.EXTRA_TITLE)}", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString().endsWith(" by 08:20"))
         assertEquals(at("2026-11-18T08:20"), n.`when`)
         assertNull("nothing waits while promised", posted(Shade.NAG))
         assertEquals(at("2026-11-18T08:20"), alarms.nextAlarmClock.triggerTime)

@@ -259,9 +259,11 @@ internal object Rules {
     private fun groupsOf(plan: Plan, st: State, keys: Collection<String>): List<Group> =
         plan.doses.filter { it.key in keys }.map { it.group }.distinct().mapNotNull { st.groups[it] }
 
-    /** The stale notice's time, the plan's days after the app last sent one, or null once shown for that plan. */
+    /** The stale notice's time, the plan's days after the app last sent one, or null once shown for that plan. A plan
+     * whose idle days are 0 has no stale notice: no medication left whose reminders could run out. */
     fun stale(plan: Plan, st: State): Long? =
-        if (st.planAt == 0L || st.staleShown == st.planAt) null else st.planAt + plan.idle.afterDays * 24L * 60 * 60_000
+        if (st.planAt == 0L || st.staleShown == st.planAt || plan.idle.afterDays == 0) null
+        else st.planAt + plan.idle.afterDays * 24L * 60 * 60_000
 
     /** The one alarm to set: the earliest of every group's time, ring's end and next nag, every open dose's promise
      * deadline and lapse, and the stale notice. A time already past fires at once. */
