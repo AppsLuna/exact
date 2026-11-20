@@ -68,7 +68,16 @@
     },
     "NagState": {
       "doses": "NagDoseState[]",
-      "events": "NagEvent[]"
+      "events": "NagEvent[]",
+      "front": "option<NagFront>"
+    },
+    "NagFront": {
+      "nag": "number",
+      "group": "string",
+      "route": "string",
+      "keys": "string[]",
+      "names": "string[]",
+      "at": "number"
     },
     "NagDoseState": {
       "key": "string",
@@ -266,7 +275,8 @@
       "substitute": {
         "default": {
           "doses": [],
-          "events": []
+          "events": [],
+          "front": null
         }
       }
     },

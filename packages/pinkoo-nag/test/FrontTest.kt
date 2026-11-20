@@ -3,8 +3,6 @@ package pinkoo.nag
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationManager
-import android.content.Intent
-import android.net.Uri
 import android.os.Looper
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
@@ -31,8 +29,12 @@ import java.time.Duration
 /**
  * Decision 17: with Pinkoo in front, a loud nag rings on the nag screen without Android's heads-up over it. The nag that
  * rings in front is posted on the waiting channel (low importance: Android shows no heads-up for it) with no full-screen
- * intent, and stays so to its end; the ring plays as always; the module opens the nag route itself, unless the nag
- * screen already shows the dose. In the background nothing changes.
+ * intent, and stays so to its end; the ring plays as always. In the background nothing changes.
+ *
+ * Decision 7: the engine opens nothing in front. It tells the app (`nagState().front`): the app opens the nag screen at
+ * once, or shows a banner while she is in a form and opens it when she leaves. The front lasts until the nag screen shows
+ * one of its doses, the dose is answered, promised or missed, or a loud nag rings in the background; a nag the nag screen
+ * already shows has none.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE, shadows = [ExtensionInvokeTest.Host::class])
@@ -61,13 +63,23 @@ internal class FrontTest : EngineCase() {
     private fun idle(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
     private fun send(name: String, args: JSONObject) = module!!.later(name, args) {}
     private fun keys() = JSONArray(listOf(pillA.getString("key")))
+    private fun showing(on: Boolean) = send("nagScreen", JSONObject().put("showing", on).put("keys", if (on) keys() else JSONArray()))
+
+    /** What the app reads: `nagState().front`, or null. */
+    private fun front(): JSONObject? {
+        var reply: JSONObject? = null
+        module!!.later("nagState", JSONObject()) { reply = it }
+        val r = reply!!
+        assertTrue("nagState always says front, null when none", r.has("front"))
+        return r.optJSONObject("front")
+    }
 
     /** The app leaves the front: the activity pauses, and the module hears it. */
     private fun away() { Extensions.paused(); module!!.paused() }
     private fun back() { Extensions.resumed(); module!!.resumed() }
 
-    /** What the module opened in the app since the last look: the intent's location, or null. */
-    private fun opened(): String? = shadowOf(activity).nextStartedActivity?.data?.toString()
+    /** Whatever the module started in the app since the last look: the engine never opens the nag route in front. */
+    private fun assertOpenedNothing() = assertNull("the app decides; the engine opens nothing", shadowOf(activity).nextStartedActivity)
 
     /** Pill A's 08:00 dose due at [at], rung by the alarm and played by the service. */
     private fun fire(at: String = "2026-11-18T08:00") {
@@ -76,11 +88,14 @@ internal class FrontTest : EngineCase() {
         serve()
     }
 
-    private fun schedule() = Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+    /** Pill A's plan, or one of [doses]. */
+    private fun schedule(vararg doses: JSONObject) =
+        Engine.schedule(app, NagFixtures.plan(*(if (doses.isEmpty()) arrayOf(pillA) else doses)), at("2026-11-18T07:00"))
 
-    @Test fun aNagThatRingsInFrontHasNoHeadsUpAndOpensTheNagScreen() {
+    @Test fun aNagThatRingsInFrontHasNoHeadsUpAndTellsTheApp() {
         made()
         schedule()
+        assertNull("nothing rang yet", front())
         fire()
         val n = nag()!!.notification
         assertEquals("the waiting channel", Shade.CH_WAITING, n.channelId)
@@ -92,13 +107,19 @@ internal class FrontTest : EngineCase() {
         assertTrue("with its Not now", n.actions.any { it.title == "notNow" })
         assertNotNull("the service plays the ring", NagService.running)
         assertEquals("ringing", group().state)
-        idle(NagModule.IN_FRONT_OPEN_MS - 100)
-        assertNull("not yet", opened())
-        idle(100)
-        assertEquals("the nag route, as the full-screen intent opens it", route, opened())
+        val f = front()!!
+        assertEquals("the nag's number, new for every loud nag", group().nag, f.getInt("nag"))
+        assertEquals("2026-11-18T08:00", f.getString("group"))
+        assertEquals("the route the full-screen intent opens, ringing until her first touch", route, f.getString("route"))
+        assertEquals(listOf("a@2026-11-18T08:00"), (0 until f.getJSONArray("keys").length()).map { f.getJSONArray("keys").getString(it) })
+        assertEquals("the banner's names", "Pill A", f.getJSONArray("names").getString(0))
+        assertEquals(at("2026-11-18T08:00"), f.getLong("at"))
+        idle(5_000)
+        assertOpenedNothing()
+        assertEquals("still there for the app until the nag screen shows it", f.toString(), front().toString())
     }
 
-    @Test fun inTheBackgroundTheLoudNagIsUnchanged() {
+    @Test fun inTheBackgroundTheLoudNagIsUnchangedAndHasNoFront() {
         made()
         away()
         schedule()
@@ -107,72 +128,140 @@ internal class FrontTest : EngineCase() {
         assertEquals(Shade.CH_NAG, n.channelId)
         assertEquals(NotificationManager.IMPORTANCE_HIGH, nm.getNotificationChannel(Shade.CH_NAG).importance)
         assertEquals(FullScreen.allowed(app), n.fullScreenIntent != null)
+        assertNull(front())
+        back()
+        assertNull("back in front while it rings: its heads-up and full-screen nag were the pop-up", front())
         idle(5_000)
-        assertNull("the full-screen intent opens it, not the module", opened())
+        assertOpenedNothing()
     }
 
-    /** "Ainda não" in Novo remédio opens the nag route itself and the route says what it shows: no second route. */
-    @Test fun theNagScreenAlreadyShowingTheDoseIsNotOpenedAgain() {
+    /** "Ainda não" in Novo remédio opens the nag route itself and the route says what it shows: no front. */
+    @Test fun aNagTheNagScreenAlreadyShowsHasNoFront() {
         made()
         schedule()
         clock = at("2026-11-18T07:59")
-        send("nagScreen", JSONObject().put("showing", true).put("keys", keys()))
+        showing(true)
         fire()
         assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
         assertEquals("it rings on the nag screen", "ringing", group().state)
-        idle(5_000)
-        assertNull(opened())
+        assertNull(front())
     }
 
-    /** The route the app opened says so a moment after the ring started (its first read): still no second route. */
-    @Test fun aRouteThatSaysItShowsWithinTheWaitIsNotOpenedAgain() {
+    /** The app opened the route; her first touch says it shows the dose (it silences the ring): the front ends. */
+    @Test fun theNagScreenShowingTheDoseEndsTheFront() {
         made()
         schedule()
         fire()
-        idle(300)
-        clock += 300
-        send("nagScreen", JSONObject().put("showing", true).put("keys", keys()))
-        idle(5_000)
-        assertNull(opened())
+        assertNotNull(front())
+        clock += 3_000
+        showing(true)
+        assertNull(front())
+        assertEquals("the ring stopped, nothing climbed", "pending", group().state)
+        assertEquals(0, group().ignores)
+        showing(false)
+        assertNull("leaving the route brings nothing back", front())
     }
 
-    /** Off the nag route (the app says so), the next nag in front opens it again. */
-    @Test fun offTheNagRouteTheNextNagInFrontOpensIt() {
+    /** Off the nag route (the app says so), the next nag in front tells the app again. */
+    @Test fun offTheNagRouteTheNextNagInFrontTellsTheApp() {
         made()
         schedule()
-        send("nagScreen", JSONObject().put("showing", true).put("keys", keys()))
-        send("nagScreen", JSONObject().put("showing", false).put("keys", JSONArray()))
+        showing(true)
+        showing(false)
         fire()
-        idle(NagModule.IN_FRONT_OPEN_MS)
-        assertEquals(route, opened())
+        assertEquals(route, front()!!.getString("route"))
     }
 
-    /** Answered before the wait ends (Today's own pinky, say): nothing opens. */
-    @Test fun nothingOpensOnceTheDoseIsAnswered() {
+    /** Answered from elsewhere (Today's own pinky, say): nothing is left to show. */
+    @Test fun anAnsweredDoseEndsTheFront() {
         made()
         schedule()
         fire()
+        assertNotNull(front())
         send("resolveNags", JSONObject().put("keys", keys()).put("kind", "taken"))
+        assertNull(front())
         idle(5_000)
-        assertNull(opened())
+        assertOpenedNothing()
     }
 
-    /** Gone to the background before the wait ends: nothing opens; the ring goes on, quiet. */
-    @Test fun nothingOpensOnceTheAppLeft() {
+    /** Unseen until it is missed (she stayed in the form all day): nothing is left to show. */
+    @Test fun aMissedDoseEndsTheFront() {
         made()
         schedule()
         fire()
-        away()
-        idle(5_000)
-        assertNull(opened())
+        assertNotNull(front())
+        // Its ring runs out and nobody looks until 20:00, when the dose is missed.
+        clock = at("2026-11-18T20:00")
+        Engine.fire(app, clock)
+        assertEquals("lapsed", Store.state(app).doses.getValue("a@2026-11-18T08:00").state)
+        assertNull(front())
+    }
+
+    /** A promise holds it (no front); its deadline, rung in front, tells the app again, as a new nag. */
+    @Test fun aPromiseDeadlineInFrontTellsTheAppAgain() {
+        made()
+        schedule()
+        fire()
+        val first = front()!!.getInt("nag")
+        send("resolveNags", JSONObject().put("keys", keys()).put("kind", "promised").put("until", at("2026-11-18T08:10")))
+        assertNull(front())
+        fire("2026-11-18T08:10")
         assertEquals("ringing", group().state)
         assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
+        assertNull(nag()!!.notification.fullScreenIntent)
+        val f = front()!!
+        assertTrue("a new nag: the app acts on it again", f.getInt("nag") > first)
+        assertEquals(route, f.getString("route"))
+        idle(5_000)
+        assertOpenedNothing()
+    }
+
+    /**
+     * She is in a form (the app shows its banner, so nothing shows the nag screen): the front waits for her across
+     * leaving the app, the ring running out (its ignore) and a process death, and ends only once the nag screen shows it.
+     */
+    @Test fun theFrontWaitsUntilTheNagScreenShowsIt() {
+        made()
+        schedule()
+        fire()
+        val f = front()!!
+        away()
+        assertEquals("left mid-form", f.toString(), front().toString())
+        back()
+        clock = at("2026-11-18T08:01")
+        Engine.fire(app, clock)
+        assertEquals("the ring ran out: its ignore", 1, group().ignores)
+        assertEquals("pending", group().state)
+        assertEquals("still unseen", f.getInt("nag"), front()!!.getInt("nag"))
+        // A process death: the module, its screen and what was posted are gone; the state file keeps the front.
+        module!!.destroy {}
+        Shade.forget()
+        NagService.running = null
+        made()
+        assertEquals(f.getInt("nag"), front()!!.getInt("nag"))
+        showing(true)
+        assertNull(front())
+    }
+
+    /** Two groups one alarm rings together (a late alarm): the front names the earliest, which the nag route shows. */
+    @Test fun twoGroupsInOneNagLeadWithTheEarliest() {
+        val pillB = NagFixtures.dose("b@2026-11-18T08:20", "2026-11-18T08:20", "2026-11-18T20:20", "Pill B")
+        made()
+        schedule(pillB, pillA)
+        fire("2026-11-18T08:20")
+        val f = front()!!
+        assertEquals("2026-11-18T08:00", f.getString("group"))
+        assertEquals("a@2026-11-18T08:00", f.getJSONArray("keys").getString(0))
+        assertEquals(1, f.getJSONArray("names").length())
+        // The nag screen shows the 08:00 dose: the nag that rang for both was shown.
+        showing(true)
+        assertNull(front())
     }
 
     /**
      * Quiet to its end: leaving the app while it rings, its ring running out and a process death post nothing loud
-     * (nothing pops up twice). The next nag, rung with the app in the background, is loud again: a new notification
-     * with its heads-up and full-screen intent.
+     * (nothing pops up twice). The next nag, rung with the app in the background, is loud again (a new notification with
+     * its heads-up and full-screen intent) and ends the front: its full-screen nag is the pop-up.
      */
     @Test fun aNagRungInFrontStaysQuietToItsEndAndTheNextOneInTheBackgroundIsLoud() {
         made()
@@ -194,45 +283,20 @@ internal class FrontTest : EngineCase() {
         Engine.fire(app, clock)
         assertEquals(1, group().ignores)
         assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
+        assertNotNull("unseen: the app opens it when she is back", front())
         // The next nag rings with the app in the background.
         fire("2026-11-18T08:21")
         val loud = nag()!!
         assertTrue("a new notification", loud.id != id)
         assertEquals(Shade.CH_NAG, loud.notification.channelId)
         assertEquals(FullScreen.allowed(app), loud.notification.fullScreenIntent != null)
+        assertNull(front())
         // Back in front while it rings: what showed stays as it was (its heads-up came and went with the app away).
         val shown = shadowOf(nm).getNotification(loud.id)
         back()
         assertSame(shown, shadowOf(nm).getNotification(loud.id))
+        assertNull("rung in the background: the app does not open the nag route", front())
         idle(5_000)
-        assertNull("rung in the background: the app does not open the nag route", opened())
-    }
-
-    /** A promise's deadline that comes with the app in front rings the same way: on the nag screen, no heads-up. */
-    @Test fun aPromiseDeadlineInFrontRingsOnTheNagScreen() {
-        made()
-        schedule()
-        fire()
-        send("resolveNags", JSONObject().put("keys", keys()).put("kind", "promised").put("until", at("2026-11-18T08:10")))
-        idle(5_000)
-        assertNull(opened())
-        fire("2026-11-18T08:10")
-        assertEquals("ringing", group().state)
-        assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
-        assertNull(nag()!!.notification.fullScreenIntent)
-        idle(NagModule.IN_FRONT_OPEN_MS)
-        assertEquals(route, opened())
-    }
-
-    /** The intent the module starts is the app's own alias, at the nag route, as a notification's tap is. */
-    @Test fun theNagRouteOpensThroughTheAppsAlias() {
-        made()
-        schedule()
-        fire()
-        idle(NagModule.IN_FRONT_OPEN_MS)
-        val intent: Intent = shadowOf(activity).nextStartedActivity!!
-        assertEquals("dev.exact.app.Notify", intent.component?.className)
-        assertEquals(Intent.ACTION_VIEW, intent.action)
-        assertEquals(Uri.parse(route), intent.data)
+        assertOpenedNothing()
     }
 }

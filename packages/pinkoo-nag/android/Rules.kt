@@ -151,13 +151,23 @@ internal object Rules {
     }
 
     /** The nag screen opened on [keys]: their ring stops, and nothing climbs; the next nag counts from the opening, as
-     * the app's ladder does (`nagAfterOpen`). */
+     * the app's ladder does (`nagAfterOpen`). A nag of theirs that rang in front has been shown ([front]). */
     fun opened(plan: Plan, st: State, keys: Collection<String>, now: Long, out: MutableList<Event>) {
         for (g in groupsOf(plan, st, keys)) {
             if (g.state == "ringing") { g.state = "pending"; g.nextAt = now + plan.interval(g.ignores + 1) }
             for (d in open(plan, st, g)) if (d.key in keys) out += event(st, d.key, "opened", null, now)
+            if (st.front != 0 && g.nag == st.front) st.front = 0
         }
     }
+
+    /**
+     * Decision 7: the lead group (the earliest) of the nag that rang with the app in front and the nag screen has not
+     * shown yet, which the app reads (`nagState().front`); null once shown, answered, promised or missed, or after a loud
+     * nag in the background.
+     */
+    fun front(plan: Plan, st: State): Group? = if (st.front == 0) null else st.groups.values
+        .filter { it.nag == st.front && (it.state == "ringing" || it.state == "pending") && open(plan, st, it).isNotEmpty() }
+        .minByOrNull { it.group }
 
     /**
      * [keys] resolved in the app: `taken` or `skipped` closes them; `promised` holds their groups until [until], capped

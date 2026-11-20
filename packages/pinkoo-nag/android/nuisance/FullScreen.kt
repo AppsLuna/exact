@@ -1,7 +1,8 @@
 // The full-screen nag: the nag route over the keyguard, the screen turned on, when the loud nag is posted. From Android
 // 14 the person (or Play, for an app that is not a calling or alarm app) may take the access away; then the loud nag
 // is a heads-up notification with the ring, as the platform shows a full-screen intent to someone using the phone.
-// A nag that rang with the app in front has none (decision 17): the module opens the nag route in the app instead.
+// A nag that rang with the app in front has none (decision 17): the app opens the nag route itself (decision 7,
+// `nagState().front`).
 package pinkoo.nag
 
 import android.app.Notification

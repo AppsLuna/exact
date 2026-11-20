@@ -12,7 +12,7 @@ const absent = async () => ({ error: 'NotSupportedError' });
 export function implementation() {
   return {
     async nagStatus() { return STATUS; },
-    async nagState() { return { doses: [], events: [] }; },
+    async nagState() { return { doses: [], events: [], front: null }; },
     scheduleNags: absent,
     resolveNags: absent,
     ignoreNags: absent,
