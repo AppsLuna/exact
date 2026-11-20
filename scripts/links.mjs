@@ -103,9 +103,11 @@ export const appleComponents = (claim) => [...claim.exclude.map((p) => ({ '/': p
  * that is done only where the app supports no release before 15 (`host.android.minimumOS`, default 12). */
 export function androidLinkFilters(manifest, callbacks = []) {
   const from15 = Number(manifest.host?.android?.minimumOS ?? '12') >= 15;
-  return linkClaims(manifest, callbacks).map((c) => {
-    const inside = c.exclude.filter((p) => p.startsWith(c.scope)), grouped = inside.length > 0 && (c.scope === '/' || from15);
-    return { host: c.host, pathPrefix: c.scope === '/' || grouped ? null : c.scope, exclude: grouped ? inside : [], allow: c.scope, claimed: grouped ? [] : inside };
+  return linkClaims(manifest, callbacks).map((c, i) => {
+    // app.origin's claim (the first) narrowed to `host.android.linkScope`, inside the scope (`linkProblems`).
+    const narrowed = i === 0 && manifest.host?.android?.linkScope, scope = narrowed ? withBase(narrowed, manifest.host?.web?.base ?? '/') : c.scope;
+    const inside = c.exclude.filter((p) => p.startsWith(scope)), grouped = inside.length > 0 && (scope === '/' || from15);
+    return { host: c.host, pathPrefix: scope === '/' || grouped ? null : scope, exclude: grouped ? inside : [], allow: scope, claimed: grouped ? [] : inside };
   });
 }
 
@@ -127,6 +129,11 @@ export function linkProblems(manifest) {
       const start = new URL(manifest.start_url ?? '/', 'https://scope.invalid');
       if (start.origin !== 'https://scope.invalid' || !start.pathname.startsWith(scope)) problems.push(`start_url: ${manifest.start_url ?? '/'} is outside scope ${scope}, so the web manifest would ignore the scope`);
     }
+  }
+  const narrowed = manifest.host?.android?.linkScope;
+  if (narrowed !== undefined) {
+    if (!/^\/(?!\/)/.test(narrowed) || /[?#*]/.test(narrowed) || /(^|\/)\.\.?(\/|$)/.test(narrowed)) problems.push(`host.android.linkScope: ${JSON.stringify(narrowed)} is not an absolute path on app.origin (one leading /, no query, fragment, dot segment or *)`);
+    else if (!narrowed.startsWith(effectiveScope(manifest))) problems.push(`host.android.linkScope: ${narrowed} is outside scope ${effectiveScope(manifest)}`);
   }
   const own = appOrigin ? claimedOrigin(appOrigin) : null;
   if (handle === 'preferred') {

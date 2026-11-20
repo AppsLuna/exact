@@ -1204,6 +1204,10 @@
               "description": "The SHA-256 fingerprints of every certificate that signs the app (the debug key, the upload key, Play App Signing's), as `AB:CD:…`: the origin's `/.well-known/assetlinks.json` lets each use the app's passkeys (LLP 1133.011 D6).",
               "type": "array",
               "items": { "type": "string", "pattern": "^[0-9A-F]{2}(:[0-9A-F]{2}){31}$" }
+            },
+            "linkScope": {
+              "description": "The path inside `scope` that `handle_links: \"preferred\"` claims on app.origin on Android, as `/invites/`: the App Link filter's own path, so only links under it open the app and the rest of the scope stays in the browser on every release. Absent: the scope. Apple's claim is the domain; its paths are the origin's `apple-app-site-association`.",
+              "type": "string"
             }
           },
           "additionalProperties": false

@@ -331,3 +331,39 @@ test('JavaScript derives callback associations and preserves a bake\'s passkeys'
     expect(names.map(name => readFileSync(resolve(out, '.well-known', name), 'utf8'))).toEqual(files);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
+
+test('host.android.linkScope narrows the Android claim on app.origin to one path inside the scope', async () => {
+  const { linkProblems } = await import('./links.mjs');
+  const { withAppLinks } = await import('./android-manifest.mjs');
+  const { nativeManifestMetadata, readManifest } = await import('./app.mjs');
+  const site = { ...notes, start_url: '/', scope: '/', host: { ...notes.host, android: { ...notes.host.android, linkScope: '/i/' } } };
+  // The filter's own path: only /i/ opens the app, on every release; the extension origin stays whole.
+  assert.deepEqual(androidLinkFilters(site), [
+    { host: 'notes.example', pathPrefix: '/i/', exclude: [], allow: '/i/', claimed: [] },
+    { host: 'share.example', pathPrefix: null, exclude: [], allow: '/', claimed: [] }]);
+  assert.match(withAppLinks('', androidLinkFilters(site)), /<data android:host="notes.example" \/>\n\s*<data android:pathPrefix="\/i\/" \/>\n\s*<\/intent-filter>/);
+  assert.deepEqual(nativeManifestMetadata(site, 'android').links.map((f) => [f.host, f.pathPrefix]), [['notes.example', '/i/'], ['share.example', null]]);
+  // Only Android's: Apple signs the domain, and the claims (the association files' paths) keep the scope.
+  assert.deepEqual(linkClaims(site).map((c) => c.scope), ['/', '/']);
+  assert.deepEqual(appleLinkDomains(site), appleLinkDomains({ ...site, host: notes.host }));
+  // An exclusion inside it is still left out, as under a narrower scope.
+  assert.deepEqual(androidLinkFilters(site, ['https://notes.example/i/cb'])[0], { host: 'notes.example', pathPrefix: '/i/', exclude: [], allow: '/i/', claimed: ['/i/cb'] });
+  const from15 = { ...site, host: { ...site.host, android: { ...site.host.android, minimumOS: '15' } } };
+  assert.deepEqual(androidLinkFilters(from15, ['https://notes.example/i/cb'])[0], { host: 'notes.example', pathPrefix: null, exclude: ['/i/cb'], allow: '/i/', claimed: [] });
+  // Refused outside the scope or as anything but an absolute path.
+  assert.deepEqual(linkProblems(site), []);
+  assert.deepEqual(linkProblems({ ...site, start_url: '/notes/', scope: '/notes/' }), ['host.android.linkScope: /i/ is outside scope /notes/']);
+  for (const bad of ['i/', '//i/', '/i/*', '/i/?a', '/i/#a', '/./i/', '/i/../w/']) {
+    const problems = linkProblems({ ...site, host: { android: { linkScope: bad } } });
+    assert.equal(problems.length, 1, bad);
+    assert.match(problems[0], /host.android.linkScope: .* is not an absolute path on app.origin/, bad);
+  }
+  // The schema takes it.
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-link-scope-'));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(site));
+    assert.equal(readManifest(dir, 'notes').host.android.linkScope, '/i/');
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...site, host: { android: { linkScope: '/notes' } }, start_url: '/notes/', scope: '/notes/' }));
+    assert.throws(() => readManifest(dir, 'notes'), /linkScope: \/notes is outside scope \/notes\//);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
