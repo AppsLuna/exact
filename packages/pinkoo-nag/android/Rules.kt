@@ -153,13 +153,30 @@ internal object Rules {
     }
 
     /** No ring can be stopped (notifications off): the groups wait silently, with no next nag, until notifications are
-     * back ([unmute]) or they lapse. A promise whose deadline came is over: its dose waits with them. */
-    fun mute(plan: Plan, st: State, groups: List<Group>, now: Long) {
+     * back ([unmute]) or they lapse. A promise whose deadline came is over: its dose waits with them. Returns the groups
+     * it silenced (those with a dose left to nag). */
+    fun mute(plan: Plan, st: State, groups: List<Group>, now: Long): List<Group> {
+        val muted = ArrayList<Group>()
         for (g in groups) {
             release(plan, st, g, now)
             if (nagged(plan, st, g).isEmpty()) { settle(plan, st, g); continue }
             g.state = "pending"; g.nextAt = null; g.until = null
+            muted += g
         }
+        return muted
+    }
+
+    /**
+     * Item 20: groups [mute] silenced while the app is in front still come up there, as a nag of their own number that
+     * the app opens without a ring (`nagState().front`). It rang nothing, so nothing can ignore it: no rung climbs, as
+     * for any nag the phone never rang, and its groups wait with no next nag, as muted. Its number comes from the
+     * nags' own count, so each loud nag after it is still a new notification. Returns it, or 0 with no group.
+     */
+    fun silent(st: State, groups: List<Group>): Int {
+        if (groups.isEmpty()) return 0
+        val nag = ++st.nag
+        for (g in groups) { g.nag = nag; g.ignoredNag = nag }
+        return nag
     }
 
     /** Notifications are back: every group [mute] silenced nags at once. */

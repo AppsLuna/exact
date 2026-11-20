@@ -73,6 +73,11 @@ internal class State(
      * (`nagState().front`) and brings the nag screen itself, or a banner over a form (decision 7). Kept across a process
      * death; a later nag replaces it, and a loud one in the background clears it. */
     var front: Int = 0,
+    /** The last nag that came due with the app in front while no ring could be stopped (notifications off): it rang
+     * nothing, and the app opens the nag screen for it all the same (item 20, `nagState().front`, `?via=silent`). */
+    var silent: Int = 0,
+    /** When [silent] came due: the front's `at`, as a nag that rang has its fire's. */
+    var silentAt: Long = 0,
     /** Made anew, not read: there was no state file, or it could not be read. Not kept. */
     val fresh: Boolean = false,
     /** The state's version: 2 since promises are per dose ([Rules.upgrade] brings a 1 up). */
@@ -82,7 +87,7 @@ internal class State(
         .put("groups", JSONArray(groups.values.map { it.json() })).put("doses", JSONArray(doses.values.map { it.json() }))
         .put("nag", nag).put("event", event).put("planHash", planHash).put("planAt", planAt).put("staleShown", staleShown)
         .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed).put("bubbleClosed", bubbleClosed)
-        .put("quiet", quiet).put("front", front)
+        .put("quiet", quiet).put("front", front).put("silent", silent).put("silentAt", silentAt)
 
     companion object {
         const val VERSION = 2
@@ -91,7 +96,7 @@ internal class State(
             val s = State(nag = o.optInt("nag"), event = o.optLong("event"), planHash = o.optInt("planHash"), planAt = o.optLong("planAt"),
                 staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), swiped = o.optInt("swiped"),
                 promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"), quiet = o.optInt("quiet"),
-                front = o.optInt("front"), v = o.optInt("v", 1))
+                front = o.optInt("front"), silent = o.optInt("silent"), silentAt = o.optLong("silentAt"), v = o.optInt("v", 1))
             o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) Group.from(a.getJSONObject(i)).let { s.groups[it.group] = it } }
             o.optJSONArray("doses")?.let { a -> for (i in 0 until a.length()) DoseState.from(a.getJSONObject(i)).let { s.doses[it.key] = it } }
             return s

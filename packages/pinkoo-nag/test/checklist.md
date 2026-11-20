@@ -37,3 +37,8 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
    unlock. Force-stop Pinkoo in Settings: nothing nags until Pinkoo is opened; then an overdue nag rings at once.
 8. **Six days away.** With Pinkoo not opened for six days (the day before its seven days of nags run out), the notice
    asking to open it shows.
+11. **Notifications off, Pinkoo open.** Turn Pinkoo's notifications off in Settings, keep Pinkoo open on Today at a
+   dose's time: the nag screen opens by itself with no ring, no "tocando" and no notification. "Agora não" there counts
+   nothing (the rung stays). In a form the banner shows quiet, and the nag screen opens when she leaves the form. With
+   Pinkoo in the background at that time, nothing opens, then or when she comes back. Turn notifications back on and
+   return to Pinkoo: the dose rings at once on the nag screen.

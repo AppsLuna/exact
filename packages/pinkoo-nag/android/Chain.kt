@@ -130,6 +130,9 @@ internal object Engine {
      * Decision 7: the engine opens nothing in front. It tells the app ([State.front], read as `nagState().front`), which
      * opens the nag screen at once, or shows a banner while she is in a form and opens it when she leaves; unless the nag
      * screen already shows one of its doses ("Ainda não" in Novo remédio). A loud nag in the background clears it.
+     *
+     * Item 20: with notifications off nothing rings, but a nag due with the app in front still tells it, as a silent nag
+     * ([Rules.silent], [State.silent]) that the app opens without a ring. In the background it is only muted, as before.
      */
     @Synchronized fun fire(c: Context, now: Long = now()) {
         val (plan, st) = load(c, now) ?: return Chain.arm(c, null)
@@ -141,14 +144,18 @@ internal object Engine {
         val due = Rules.due(plan, st, now)
         val front = appInFront
         if (due.isNotEmpty()) {
+            val shown = screen
+            val told = front && due.none { g -> plan.doses(g.group).any { it.key in shown } }
             if (stoppable) {
                 Rules.fire(plan, st, due, now, events)
                 if (front) st.quiet = st.nag
-                val shown = screen
-                st.front = if (front && due.none { g -> plan.doses(g.group).any { it.key in shown } }) st.nag else 0
+                st.front = if (told) st.nag else 0
                 val today = WallClock.day(now)
                 if (plan.stock != null && st.stockDay != today) { st.stockDay = today; guard("stock") { Shade.post(c, Shade.STOCK, Shade.stock(c, plan)) } }
-            } else Rules.mute(plan, st, due, now)
+            } else {
+                val muted = Rules.mute(plan, st, due, now)
+                if (told && muted.isNotEmpty()) { st.front = Rules.silent(st, muted); st.silent = st.front; st.silentAt = now }
+            }
         }
         if (Rules.stale(plan, st)?.let { it <= now } == true) { st.staleShown = st.planAt; guard("stale") { Shade.post(c, Shade.STALE, Shade.stale(c, plan)) } }
         commit(c, plan, st, events, now)

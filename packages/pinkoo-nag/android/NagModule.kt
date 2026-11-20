@@ -189,12 +189,17 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
      * when she leaves; showing one of its doses (`nagScreen`) clears it. `nag` is new for every loud nag, so the app acts
      * once per nag; `keys` and `names` are the lead group's open doses under no promise (the ones it rang for), `at`
      * when it rang.
+     *
+     * Item 20: a nag that came due in front with notifications off rang nothing ([State.silent]). Its route says
+     * `?via=silent`: the nag screen tells the engine it shows the dose at its first show, as when she opens it herself,
+     * which ends the front (with `fsi` it would wait for a touch that silences a ring). `at` is when it came due.
      */
     private fun front(plan: Plan, st: State): JSONObject? = Rules.front(plan, st)?.let { g ->
         val doses = Rules.nagged(plan, st, g)
-        JSONObject().put("nag", st.front).put("group", g.group).put("route", Shade.route(plan, g.group, "fsi"))
+        val silent = st.front == st.silent
+        JSONObject().put("nag", st.front).put("group", g.group).put("route", Shade.route(plan, g.group, if (silent) "silent" else "fsi"))
             .put("keys", JSONArray(doses.map { it.key })).put("names", JSONArray(doses.map { it.name }.distinct()))
-            .put("at", g.lastFiredAt ?: 0L)
+            .put("at", if (silent) st.silentAt else g.lastFiredAt ?: 0L)
     }
 
     // MARK: the status (the alarm-health panel)

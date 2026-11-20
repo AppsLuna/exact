@@ -35,6 +35,9 @@ import java.time.Duration
  * once, or shows a banner while she is in a form and opens it when she leaves. The front lasts until the nag screen shows
  * one of its doses, the dose is answered, promised or missed, or a loud nag rings in the background; a nag the nag screen
  * already shows has none.
+ *
+ * Item 20: with notifications off nothing rings, but a nag due with Pinkoo in front still tells the app, which opens the
+ * nag screen without a ring (`?via=silent`). It rang nothing, so nothing can ignore it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE, shadows = [ExtensionInvokeTest.Host::class])
@@ -43,6 +46,7 @@ internal class FrontTest : EngineCase() {
     private lateinit var activity: Activity
     private var module: NagModule? = null
     private val route = "/nag/2026-11-18T08%3A00?via=fsi"
+    private val silentRoute = "/nag/2026-11-18T08%3A00?via=silent"
 
     @Before fun show() {
         activity = Robolectric.buildActivity(Activity::class.java).setup().get()
@@ -73,6 +77,11 @@ internal class FrontTest : EngineCase() {
         assertTrue("nagState always says front, null when none", r.has("front"))
         return r.optJSONObject("front")
     }
+
+    private fun list(a: JSONArray): List<String> = (0 until a.length()).map { a.getString(it) }
+
+    /** Notifications for Pinkoo switched off (or on) in Android's Settings: no ring can be stopped, so none starts. */
+    private fun notifications(on: Boolean) = shadowOf(nm).setNotificationsEnabled(on)
 
     /** The app leaves the front: the activity pauses, and the module hears it. */
     private fun away() { Extensions.paused(); module!!.paused() }
@@ -298,5 +307,123 @@ internal class FrontTest : EngineCase() {
         assertNull("rung in the background: the app does not open the nag route", front())
         idle(5_000)
         assertOpenedNothing()
+    }
+
+    // MARK: item 20, notifications off
+
+    /**
+     * Notifications off and Pinkoo in front: the nag rings nothing (no service, no next nag), but the app is told, with a
+     * route that opens the nag screen as her own opening does. Nothing ignores it, it survives a process death, and the
+     * nag screen showing it ends it.
+     */
+    @Test fun withNotificationsOffANagDueInFrontTellsTheAppWithoutARing() {
+        notifications(false)
+        made()
+        schedule()
+        fire()
+        assertNull("no ring: no service", NagService.running)
+        assertEquals("pending", group().state)
+        assertNull("no next nag while nothing can ring", group().nextAt)
+        val f = front()!!
+        assertEquals("a nag of its own number", group().nag, f.getInt("nag"))
+        assertEquals("2026-11-18T08:00", f.getString("group"))
+        assertEquals("the nag screen, telling the engine at its first show", silentRoute, f.getString("route"))
+        assertEquals(listOf("a@2026-11-18T08:00"), list(f.getJSONArray("keys")))
+        assertEquals(listOf("Pill A"), list(f.getJSONArray("names")))
+        assertEquals("when it came due", at("2026-11-18T08:00"), f.getLong("at"))
+        assertTrue("nothing fired: the app's ladder sees no ring", Store.events(app).none { it.kind == "fired" })
+        idle(5_000)
+        assertOpenedNothing()
+        // It rang nothing: "Agora não", a swipe or the bubble's close count nothing.
+        clock += 10_000
+        send("ignoreNags", JSONObject().put("keys", keys()))
+        Engine.ignore(app, f.getInt("nag"), "swipe", clock)
+        Engine.bubbleClosed(app, f.getInt("nag"), clock)
+        assertEquals(0, group().ignores)
+        assertNull(group().nextAt)
+        assertTrue(Store.events(app).none { it.kind == "ignored" })
+        assertEquals("still unseen", f.toString(), front().toString())
+        // A process death: the state file keeps it.
+        module!!.destroy {}
+        made()
+        assertEquals(f.toString(), front().toString())
+        // The nag screen shows it (its first show, `via=silent`): the front ends, nothing climbed.
+        showing(true)
+        assertNull(front())
+        assertEquals(0, group().ignores)
+        assertEquals("pending", group().state)
+        assertNull(NagService.running)
+    }
+
+    /** In the background a nag that can't ring is only muted, as before: nothing is told, nor once she is back. */
+    @Test fun withNotificationsOffANagDueInTheBackgroundTellsNothing() {
+        notifications(false)
+        made()
+        away()
+        schedule()
+        fire()
+        assertEquals("pending", group().state)
+        assertNull(front())
+        back()
+        assertNull("nothing came due while in front", front())
+        idle(5_000)
+        assertOpenedNothing()
+    }
+
+    /** "Ainda não" in Novo remédio: the nag screen already shows the dose, so nothing is told. */
+    @Test fun withNotificationsOffANagTheNagScreenAlreadyShowsHasNoFront() {
+        notifications(false)
+        made()
+        schedule()
+        clock = at("2026-11-18T07:59")
+        showing(true)
+        fire()
+        assertEquals("pending", group().state)
+        assertNull(front())
+    }
+
+    /** A promise's deadline, come with notifications off and the app in front, opens the nag screen too. */
+    @Test fun withNotificationsOffAPromiseDeadlineInFrontTellsTheApp() {
+        made()
+        schedule()
+        fire()
+        val rang = front()!!.getInt("nag")
+        send("resolveNags", JSONObject().put("keys", keys()).put("kind", "promised").put("until", at("2026-11-18T08:10")))
+        assertNull(front())
+        notifications(false)
+        fire("2026-11-18T08:10")
+        assertEquals("the promise is over, and nothing rings", "pending", group().state)
+        val f = front()!!
+        assertTrue("a new nag: the app acts on it again", f.getInt("nag") > rang)
+        assertEquals(silentRoute, f.getString("route"))
+        assertEquals(at("2026-11-18T08:10"), f.getLong("at"))
+    }
+
+    /**
+     * Notifications back on (she comes back from Settings): the muted dose nags at once. In front it rings on the nag
+     * screen as any nag in front does, a new nag that replaces the silent one, on a notification of the other id.
+     */
+    @Test fun withNotificationsBackTheNextNagInFrontRingsAndReplacesTheSilentOne() {
+        notifications(false)
+        made()
+        schedule()
+        fire()
+        val silent = front()!!.getInt("nag")
+        notifications(true)
+        away()
+        back()
+        assertEquals("set at once", clock, alarms.nextAlarmClock.triggerTime)
+        fire("2026-11-18T08:05")
+        assertEquals("ringing", group().state)
+        assertNotNull(NagService.running)
+        val f = front()!!
+        assertTrue(f.getInt("nag") > silent)
+        assertEquals(route, f.getString("route"))
+        assertEquals(at("2026-11-18T08:05"), f.getLong("at"))
+        val n = nag()!!
+        assertEquals(Shade.nagId(f.getInt("nag")), n.id)
+        assertTrue("a new notification, not the silent nag's", n.id != Shade.nagId(silent))
+        assertEquals("rung in front: no heads-up", Shade.CH_WAITING, n.notification.channelId)
+        assertNull(n.notification.fullScreenIntent)
     }
 }
