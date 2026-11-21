@@ -17,8 +17,8 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
 9. **The ring test.** Tocar na hora › "Tocar em 5 segundos", then lock the phone: 5 s after the tap the screen turns on
    with Pinkoo over the lock screen, ringing; "Ouvi!" stops it and the lock screen comes back. "Não ouvi" › "Abrir som
    do Android" opens One UI's sound page.
-10. **TalkBack.** With TalkBack on, Ajustes shows "Segurar é difícil pra mim" on, and one double tap seals the pinky on
-   Today and on the nag.
+10. **TalkBack.** With TalkBack on (Exact's `exactViewport().screenReader`), Ajustes shows "Segurar é difícil pra mim" on,
+   and one double tap seals the pinky on Today and on the nag. Check it from screenshots, never `uiautomator` (L87).
 3. **The lock screen's notification.** With the phone locked, the nag notification shows the public text, without the
    name. One UI 7 and later show lock-screen notifications as icons by default: check with "Show content" on too.
 4. **Silent, vibrate and Do Not Disturb.** The ring plays on the alarm stream in each (DND lets alarms through by

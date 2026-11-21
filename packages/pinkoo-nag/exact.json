@@ -107,8 +107,7 @@
       "standbyBucket": "number",
       "alarmVolume": "number",
       "dndAllowsAlarms": "bool",
-      "maker": "string",
-      "talkBack": "bool"
+      "maker": "string"
     },
     "NagLock": {
       "locking": "bool"
@@ -133,8 +132,7 @@
           "standbyBucket": 10,
           "alarmVolume": 1,
           "dndAllowsAlarms": true,
-          "maker": "",
-          "talkBack": false
+          "maker": ""
         },
         "targets": {
           "web": {
@@ -150,8 +148,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "ios": {
             "available": false,
@@ -166,8 +163,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "macos": {
             "available": false,
@@ -182,8 +178,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "linux": {
             "available": false,
@@ -198,8 +193,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "tvos": {
             "available": false,
@@ -214,8 +208,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "windows": {
             "available": false,
@@ -230,8 +223,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           },
           "terminal": {
             "available": false,
@@ -246,8 +238,7 @@
             "standbyBucket": 0,
             "alarmVolume": 0,
             "dndAllowsAlarms": false,
-            "maker": "",
-            "talkBack": false
+            "maker": ""
           }
         },
         "web": {
@@ -263,8 +254,7 @@
           "standbyBucket": 0,
           "alarmVolume": 0,
           "dndAllowsAlarms": false,
-          "maker": "",
-          "talkBack": false
+          "maker": ""
         }
       }
     },
@@ -433,8 +423,7 @@
           "standbyBucket": 10,
           "alarmVolume": 1,
           "dndAllowsAlarms": true,
-          "maker": "",
-          "talkBack": false
+          "maker": ""
         }
       }
     },

@@ -5,7 +5,7 @@
 const STATUS = {
   available: false, notifications: 'denied', channelBlocked: false, exactAlarms: false, fullScreen: false,
   overlay: false, promoted: 'unavailable', batteryUnrestricted: false, backgroundRestricted: false, standbyBucket: 0,
-  alarmVolume: 0, dndAllowsAlarms: false, maker: '', talkBack: false,
+  alarmVolume: 0, dndAllowsAlarms: false, maker: '',
 };
 const absent = async () => ({ error: 'NotSupportedError' });
 

@@ -24,7 +24,6 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.Vibrator
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -62,8 +61,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private var previewRinging = false
     private val previewFire = Runnable { previewRing() }
     private val previewEnd = Runnable { previewStop(timedOut = true) }
-    /** TalkBack (touch exploration) turned on or off: the status changes. */
-    private val touchExploration = AccessibilityManager.TouchExplorationStateChangeListener { changed() }
 
     init {
         if (!context.agent) {
@@ -71,7 +68,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             // Made at the first frame, after the activity resumed (a tap through the notification's alias, a launch):
             // no resume reaches this module for it, so it reads whether the activity is resumed now.
             front(context.resumed)
-            accessibility()?.addTouchExplorationStateChangeListener(touchExploration)
         }
     }
 
@@ -148,7 +144,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     override fun destroy(done: () -> Unit) {
         main.removeCallbacks(lockAgain)
         previewStop(timedOut = false)
-        accessibility()?.removeTouchExplorationStateChangeListener(touchExploration)
         // A module that goes after the next one was made leaves the activity's state to that one.
         if (live?.get() === this) { live = null; Engine.appInFront = false; Engine.screen = emptySet() }
         done()
@@ -172,8 +167,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     /** The app shows over a locked keyguard: its activity can be resumed under one only over it, which an over-lock
      * activation alone allows. */
     private fun overLock(): Boolean = context.resumed && keyguardLocked()
-
-    private fun accessibility(): AccessibilityManager? = app.getSystemService(AccessibilityManager::class.java)
 
     private fun strings(a: JSONArray?): List<String> = (0 until (a?.length() ?: 0)).map { a!!.optString(it) }
 
@@ -237,8 +230,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             .put("standbyBucket", app.getSystemService(UsageStatsManager::class.java).appStandbyBucket)
             .put("alarmVolume", audio.getStreamVolume(AudioManager.STREAM_ALARM).toDouble() / max)
             .put("dndAllowsAlarms", dnd).put("maker", Build.MANUFACTURER ?: "")
-            // TalkBack (or any service exploring by touch): a hold is hard there, so the app seals with one tap.
-            .put("talkBack", accessibility()?.isTouchExplorationEnabled == true)
     }
 
     // MARK: the request: the one screen that grants [what], then the status

@@ -5,7 +5,6 @@ import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Looper
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import dev.exact.canvas.Activations
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
@@ -373,7 +372,7 @@ internal class NagModuleTest : EngineCase() {
         assertFalse(ask("ignoreNags", keysOf(pillA)).has("error"))
     }
 
-    // MARK: the ring test ("Testar o toque"), the sound page and TalkBack
+    // MARK: the ring test ("Testar o toque") and the sound page
 
     private fun preview(after: Long) = send("previewNag", JSONObject().put("rung", 0).put("after", after).put("title", "Ring test")
         .put("body", "This is how I call you").put("route", "/settings/health"))
@@ -471,13 +470,5 @@ internal class NagModuleTest : EngineCase() {
         } finally {
             shadowOf(app).checkActivities(false)
         }
-    }
-
-    /** With TalkBack on (touch exploration), the status says so: the app seals with one tap there. */
-    @Test fun theStatusSaysWhenTalkBackIsOn() {
-        made()
-        assertFalse(ask("nagStatus", JSONObject()).getBoolean("talkBack"))
-        shadowOf(app.getSystemService(AccessibilityManager::class.java)).setTouchExplorationEnabled(true)
-        assertTrue(ask("nagStatus", JSONObject()).getBoolean("talkBack"))
     }
 }
