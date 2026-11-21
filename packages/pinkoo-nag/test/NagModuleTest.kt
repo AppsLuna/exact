@@ -448,6 +448,31 @@ internal class NagModuleTest : EngineCase() {
         assertEquals(Settings.ACTION_SOUND_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
     }
 
+    /** Tocar na hora's Do Not Disturb fix opens Do Not Disturb's own page (Modes from Android 15). */
+    @Test fun dndOpensDoNotDisturbsPage() {
+        made()
+        send("requestNagAccess", JSONObject().put("what", "dnd"))
+        idle(1)
+        assertEquals(NagModule.ZEN_MODE_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
+    }
+
+    /** Where no app opens Do Not Disturb's page, the fix opens Android's sound page instead. */
+    @Test fun dndFallsBackToTheSoundPage() {
+        val settings = android.content.pm.ResolveInfo().apply {
+            activityInfo = android.content.pm.ActivityInfo().apply { packageName = "com.android.settings"; name = "Sound" }
+        }
+        shadowOf(app.packageManager).addResolveInfoForIntent(Intent(Settings.ACTION_SOUND_SETTINGS), settings)
+        shadowOf(app).checkActivities(true)
+        try {
+            made()
+            send("requestNagAccess", JSONObject().put("what", "dnd"))
+            idle(1)
+            assertEquals(Settings.ACTION_SOUND_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
+        } finally {
+            shadowOf(app).checkActivities(false)
+        }
+    }
+
     /** With TalkBack on (touch exploration), the status says so: the app seals with one tap there. */
     @Test fun theStatusSaysWhenTalkBackIsOn() {
         made()

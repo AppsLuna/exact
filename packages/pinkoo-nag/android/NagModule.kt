@@ -42,6 +42,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         /** The latest a ring test may be asked for, and how long its ring lasts unanswered. */
         const val PREVIEW_AFTER_MAX_MS = 60_000L
         const val PREVIEW_RING_MS = 20_000L
+        /** `Settings.ACTION_ZEN_MODE_SETTINGS`, which the SDK hides: Do Not Disturb's page (Modes from Android 15). */
+        const val ZEN_MODE_SETTINGS = "android.settings.ZEN_MODE_SETTINGS"
         @Volatile private var live: WeakReference<NagModule>? = null
         internal fun changed() { live?.get()?.let { it.context.changed("nag.nagState"); it.context.changed("nag.nagStatus") } }
     }
@@ -242,6 +244,16 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     // MARK: the request: the one screen that grants [what], then the status
 
     private fun request(what: String, done: () -> Unit) {
+        // Do Not Disturb's own page: on a Pixel with Android 15 or later it is Modes, which lists it (the sound page
+        // and Notifications no longer have it there). The action is the platform's but hidden from the SDK. Where no
+        // app opens it, Android's sound page.
+        if (what == "dnd") {
+            context.startActivityForResult(Intent(ZEN_MODE_SETTINGS), { why -> if (why == "NotFoundError") request("sound", done) else done() }) { _, _ ->
+                Engine.restore(app)
+                done()
+            }
+            return
+        }
         val pkg = Uri.parse("package:${app.packageName}")
         val intent = when (what) {
             "notifications" -> {

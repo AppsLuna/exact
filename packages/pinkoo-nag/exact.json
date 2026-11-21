@@ -407,7 +407,7 @@
       "send": "requestNagAccess",
       "permission": "none",
       "options": {
-        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping|sound>"
+        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping|sound|dnd>"
       },
       "answers": "NagStatus",
       "substitute": {

@@ -23,7 +23,9 @@ One UI 8) with Pinkoo installed from a release build, with its ladder at Insiste
    name. One UI 7 and later show lock-screen notifications as icons by default: check with "Show content" on too.
 4. **Silent, vibrate and Do Not Disturb.** The ring plays on the alarm stream in each (DND lets alarms through by
    default); the vibration follows the rung. With the alarm sound set to None (Clock's settings), the ring plays the
-   ringtone. With "Alarms & reminders" off for Pinkoo, the nag still sounds, from the notification itself.
+   ringtone. With "Alarms & reminders" off for Pinkoo, the nag still sounds, from the notification itself. With
+   alarms not let through Do Not Disturb, Tocar na hora's card "Abrir o Não perturbe" (`requestNagAccess("dnd")`)
+   opens One UI's Do Not Disturb page.
 5. **Swipe, bubble, unlock.** Swipe the loud nag: it comes back silent at once, and a second swipe before the next
    nag changes nothing. At the third rung the bubble shows over other apps and hides when Pinkoo is in front; dragging
    it onto the cross closes it until the next nag, even if One UI ends the app meanwhile. Tapping the notification
