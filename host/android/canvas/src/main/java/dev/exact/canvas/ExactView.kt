@@ -1080,7 +1080,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** Faces, pictures and rows announced in a new stream, made once. */
     private fun ingest(b: IntBuffer, from: Int, n: Int) {
         var i = from
+        // pinkoo (C8): where the run of sets whose faces were told ahead ends ([faces]).
+        var told = from
         while (i < n) {
+            if (i >= told && !skipDefs && b.get(i).let { it == 24 || it == 30 }) told = faces(b, i, n)
             when (b.get(i)) {
                 10, 41 -> { fonts[b.get(i + 1)] = fontAt(b, i); i = fontEnd(b, i) }
                 11 -> {
@@ -1174,7 +1177,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                         laterRows[id] = wait
                         later.add(wait)
                         if (!laterPosted) { laterPosted = true; android.view.Choreographer.getInstance().postFrameCallback(laterFrame) }
-                    } else makeRow(b, i, shown)
+                    } else {
+                        told = faces(b, j, n) // pinkoo (C8)
+                        makeRow(b, i, shown)
+                    }
                     i = j
                 }
                 17 -> {
@@ -1472,5 +1478,36 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         natives?.layerAgain(id, walk) ?: walk()
         slotOwner = outer
         ingestRow = outerRow
+    }
+
+    /** pinkoo (C8): the faces (ops 10, 41) told in the run of slot and layer sets at [from] (ops 24 and 30, among their
+     * tracks and clock), made now; where the run ends. exact2 tells a face where it first draws it, and a set follows
+     * what draws it by reference: the row, or the outer layer, which can draw that face too before its set is read (a
+     * row's positioned text after a layer it paints first). Made before the set was read, it drew none of that text. */
+    private fun faces(b: IntBuffer, from: Int, n: Int): Int {
+        var j = from
+        while (j < n) {
+            when (b.get(j)) {
+                24 -> facesIn(b, j + 3, j + 3 + b.get(j + 2))
+                30 -> facesIn(b, j + 19, j + 3 + b.get(j + 2))
+                31, 33 -> {}
+                else -> return j
+            }
+            j = structure.end(b, j)
+        }
+        return j
+    }
+
+    private fun facesIn(b: IntBuffer, from: Int, to: Int) {
+        var k = from
+        while (k < to) {
+            when (b.get(k)) {
+                10, 41 -> fonts[b.get(k + 1)] = fontAt(b, k)
+                15 -> facesIn(b, k + 6, k + 5 + b.get(k + 5))
+                24 -> facesIn(b, k + 3, k + 3 + b.get(k + 2))
+                30 -> facesIn(b, k + 19, k + 3 + b.get(k + 2))
+            }
+            k = structure.end(b, k)
+        }
     }
 }
