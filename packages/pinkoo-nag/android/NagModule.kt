@@ -50,8 +50,14 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private val app: Context get() = context.application
     private var preview: MediaPlayer? = null
     private val main = Handler(Looper.getMainLooper())
+    /**
+     * The engine handed the screen back to the keyguard ([lockAgain]) and the activity hasn't been resumed since. Android
+     * pauses it at once but keeps showing it until it sleeps (up to 5 s), so a route that says it is done then (a
+     * celebration that outlasted the cap) must still keep its frame: Today would show over the lock screen otherwise.
+     */
+    private var handedBack = false
     /** The keyguard back over the app, unless she unlocked meanwhile. */
-    private val lockAgain = Runnable { if (keyguardLocked()) context.showOverLock(false) }
+    private val lockAgain = Runnable { if (keyguardLocked()) { handedBack = true; context.showOverLock(false) } }
     /** The ring test's ring, due ([previewFire]) and then ringing until [previewEnd]. */
     private var previewRung = 0
     private var previewOpen: Intent? = null
@@ -109,8 +115,8 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             // the keyguard comes back in `after` ms, at most the celebration's cap. Whether it will: the route then keeps
             // its last frame, so what lies under it (Today) never shows over the lock screen.
             "leaveLockScreen" -> {
-                val locking = !context.agent && overLock()
-                if (locking) {
+                val locking = !context.agent && keyguardLocked() && (context.resumed || handedBack)
+                if (locking && context.resumed) {
                     main.removeCallbacks(lockAgain)
                     main.postDelayed(lockAgain, args.optDouble("after", 0.0).toLong().coerceIn(0, CELEBRATE_MAX_MS))
                 }
@@ -134,6 +140,7 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     override fun paused() = front(false)
 
     private fun front(shown: Boolean) {
+        if (shown) handedBack = false
         Engine.appInFront = shown
         if (!context.agent) Engine.restore(app, front = shown)
     }

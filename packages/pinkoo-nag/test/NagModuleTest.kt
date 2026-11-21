@@ -139,8 +139,15 @@ internal class NagModuleTest : EngineCase() {
         assertTrue(overLock)
         idle(200)
         assertFalse(overLock)
-        // Said late, after the cap: the keyguard is still on its way (Android lets the activity sleep first).
+        // Said late, after the cap: the keyguard is still on its way. Android pauses the activity at once but shows it
+        // until it sleeps, so the route keeps its frame (seen on the device: a two-dose nag's last celebration outlasted
+        // the cap, the answer was false, and Today showed over the lock screen for about 2 s).
+        Extensions.paused()
         assertTrue(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
+        // In front again (she unlocked), it leaves as usual.
+        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+        Extensions.resumed()
+        assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
     }
 
     /**
