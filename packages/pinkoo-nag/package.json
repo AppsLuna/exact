@@ -1,8 +1,8 @@
 {
   "name": "@pinkoo/nag",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Pinkoo's nagging engine on Android: a plan of doses the app sends while in front, rung up natively with alarm clocks, a ring, a full-screen nag, a returning notification, a bubble, opening at unlock and a Live Update.",
+  "description": "Pinkoo's gentle reminder on Android: a plan of doses the app sends while in front, reminded natively at exact times along her steps (the notification, De novo with the bubble, the full screen once, the alarm she turned on) and at most three repeats, with a Live Update for a promise.",
   "exports": {
     ".": "./exact.json",
     "./android": "./android/exact.json",

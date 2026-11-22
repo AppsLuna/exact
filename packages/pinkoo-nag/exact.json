@@ -1,7 +1,7 @@
 {
   "kind": "interface",
   "name": "@pinkoo/nag",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "start": "load",
   "grants": [
     "device.alarms"
@@ -13,9 +13,9 @@
       "zone": "string",
       "locale": "string",
       "ladder": "NagLadder",
-      "rungs": "NagRung[]",
+      "steps": "NagSteps",
+      "alarm": "NagAlarm",
       "liveUpdate": "bool",
-      "volume": "number[]",
       "doses": "NagDose[]",
       "texts": "NagTexts",
       "mascot": "json<any>",
@@ -25,12 +25,18 @@
     },
     "NagLadder": {
       "firstMin": "number",
-      "repeatMin": "number",
-      "ringSec": "number"
+      "thenMin": "number",
+      "repeatFirstMin": "number",
+      "repeatEveryMin": "number",
+      "repeats": "number"
     },
-    "NagRung": {
-      "ignores": "number",
-      "add": "string[]"
+    "NagSteps": {
+      "bubble": "bool",
+      "fullScreen": "bool",
+      "unlock": "bool"
+    },
+    "NagAlarm": {
+      "volume": "number"
     },
     "NagDose": {
       "key": "string",
@@ -38,7 +44,9 @@
       "name": "string",
       "miss": "string",
       "promiseUntil": "option<number>",
-      "lineSeed": "number"
+      "lineSeed": "number",
+      "sound": "string",
+      "alarm": "enum<off|afterAll|onTime>"
     },
     "NagTexts": {
       "title": "string",
@@ -49,13 +57,25 @@
       "promise": "string",
       "notNow": "string",
       "pending": "string",
+      "deadline": "string",
       "promiseChip": "string",
       "bubble": "string",
       "lines": "string[][]",
+      "notNowRemind": "string",
+      "notNowAlarm": "string",
+      "notNowWait": "string",
+      "alarmTitle": "string",
+      "alarmBody": "string",
+      "stop": "string",
+      "service": "string",
       "channelNag": "string",
       "channelPending": "string",
       "channelNotice": "string",
-      "channelRing": "string"
+      "channels": "NagChannelName[]"
+    },
+    "NagChannelName": {
+      "sound": "string",
+      "name": "string"
     },
     "NagStock": {
       "title": "string",
@@ -77,21 +97,26 @@
       "route": "string",
       "keys": "string[]",
       "names": "string[]",
-      "at": "number"
+      "at": "number",
+      "step": "enum<notify|again|full|alarm|repeat|deadline>"
     },
     "NagDoseState": {
       "key": "string",
       "state": "enum<upcoming|ringing|pending|promised|resolved|lapsed>",
-      "ignores": "number",
+      "step": "option<enum<notify|again|full|alarm|repeat|deadline>>",
+      "fires": "number",
       "rung": "number",
       "nextAt": "option<number>",
+      "nextStep": "option<enum<notify|again|full|alarm|repeat|deadline>>",
+      "alarmAt": "option<number>",
       "lastFiredAt": "option<number>"
     },
     "NagEvent": {
       "id": "string",
       "key": "string",
       "kind": "enum<fired|ignored|opened|lapsed>",
-      "reason": "option<enum<swipe|notNow|timeout|bubble>>",
+      "reason": "option<enum<notNow|timeout>>",
+      "step": "option<enum<notify|again|full|alarm|repeat|deadline>>",
       "at": "number"
     },
     "NagStatus": {
@@ -106,8 +131,24 @@
       "backgroundRestricted": "bool",
       "standbyBucket": "number",
       "alarmVolume": "number",
+      "notificationVolume": "number",
+      "ringerMode": "enum<normal|vibrate|silent>",
       "dndAllowsAlarms": "bool",
+      "dndAllowsReminders": "bool",
+      "channels": "NagChannel[]",
       "maker": "string"
+    },
+    "NagChannel": {
+      "sound": "string",
+      "id": "string",
+      "importance": "number",
+      "blocked": "bool",
+      "changed": "bool"
+    },
+    "NagSoundPick": {
+      "status": "enum<picked|unreadable|cancelled>",
+      "sound": "string",
+      "title": "string"
     },
     "NagLock": {
       "locking": "bool"
@@ -131,7 +172,11 @@
           "backgroundRestricted": false,
           "standbyBucket": 10,
           "alarmVolume": 1,
+          "notificationVolume": 1,
+          "ringerMode": "normal",
           "dndAllowsAlarms": true,
+          "dndAllowsReminders": true,
+          "channels": [],
           "maker": ""
         },
         "targets": {
@@ -147,7 +192,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "ios": {
@@ -162,7 +211,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "macos": {
@@ -177,7 +230,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "linux": {
@@ -192,7 +249,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "tvos": {
@@ -207,7 +268,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "windows": {
@@ -222,7 +287,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           },
           "terminal": {
@@ -237,7 +306,11 @@
             "backgroundRestricted": false,
             "standbyBucket": 0,
             "alarmVolume": 0,
+            "notificationVolume": 0,
+            "ringerMode": "normal",
             "dndAllowsAlarms": false,
+            "dndAllowsReminders": false,
+            "channels": [],
             "maker": ""
           }
         },
@@ -253,7 +326,11 @@
           "backgroundRestricted": false,
           "standbyBucket": 0,
           "alarmVolume": 0,
+          "notificationVolume": 0,
+          "ringerMode": "normal",
           "dndAllowsAlarms": false,
+          "dndAllowsReminders": false,
+          "channels": [],
           "maker": ""
         }
       }
@@ -397,7 +474,9 @@
       "send": "requestNagAccess",
       "permission": "none",
       "options": {
-        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping|sound|dnd>"
+        "what": "enum<notifications|exactAlarms|fullScreen|overlay|promoted|battery|sleeping|volume|dnd|channel>",
+        "stream": "option<enum<notification|alarm>>",
+        "sound": "option<string>"
       },
       "answers": "NagStatus",
       "substitute": {
@@ -422,19 +501,31 @@
           "backgroundRestricted": false,
           "standbyBucket": 10,
           "alarmVolume": 1,
+          "notificationVolume": 1,
+          "ringerMode": "normal",
           "dndAllowsAlarms": true,
+          "dndAllowsReminders": true,
+          "channels": [],
           "maker": ""
         }
       }
     },
     {
-      "send": "previewNag",
+      "send": "rehearse",
       "permission": "none",
       "options": {
-        "rung": "number",
+        "step": "enum<notify|bubble|full|alarm>",
         "after": "number",
+        "quiet": "bool",
         "title": "string",
         "body": "string",
+        "line": "string",
+        "publicTitle": "string",
+        "stop": "string",
+        "channel": "string",
+        "mascot": "string",
+        "sound": "string",
+        "volume": "number",
         "route": "string"
       },
       "answers": null,
@@ -451,7 +542,7 @@
       }
     },
     {
-      "send": "stopNagPreview",
+      "send": "stopRehearsal",
       "permission": "none",
       "options": {},
       "answers": null,
@@ -465,6 +556,90 @@
           "windows",
           "terminal"
         ]
+      }
+    },
+    {
+      "send": "previewSound",
+      "permission": "none",
+      "options": {
+        "sound": "string",
+        "usage": "enum<notification|alarm>",
+        "volume": "number"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "pickNagSound",
+      "permission": "none",
+      "options": {
+        "current": "string",
+        "title": "string"
+      },
+      "answers": "NagSoundPick",
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ],
+        "default": {
+          "status": "cancelled",
+          "sound": "",
+          "title": ""
+        }
+      }
+    },
+    {
+      "send": "renewNagChannel",
+      "permission": "none",
+      "options": {
+        "sound": "string"
+      },
+      "answers": "NagStatus",
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ],
+        "default": {
+          "available": true,
+          "notifications": "prompt",
+          "channelBlocked": false,
+          "exactAlarms": false,
+          "fullScreen": false,
+          "overlay": false,
+          "promoted": "unavailable",
+          "batteryUnrestricted": false,
+          "backgroundRestricted": false,
+          "standbyBucket": 10,
+          "alarmVolume": 1,
+          "notificationVolume": 1,
+          "ringerMode": "normal",
+          "dndAllowsAlarms": true,
+          "dndAllowsReminders": true,
+          "channels": [],
+          "maker": ""
+        }
       }
     }
   ]

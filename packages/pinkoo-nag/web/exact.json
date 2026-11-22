@@ -1,6 +1,6 @@
 {
   "kind": "implementation",
-  "implements": "@pinkoo/nag@^1.0",
+  "implements": "@pinkoo/nag@^2.0",
   "platform": "web",
   "targets": [
     "web"
