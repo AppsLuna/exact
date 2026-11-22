@@ -3,21 +3,25 @@
 // the permissions, the two receivers and the service (unexported, direct-boot aware, `systemExempted|specialUse` with
 // its subtype), and the roster binding the implementation.
 //
-// With `--emulator <serial>` it then installs the APK on that running emulator and drives it as a person would, with
-// real launches, `uiautomator` and `adb` (android-drive.mjs). What needs a phone is checklist.md's.
+// The fixture carries the default preset, Sininho, in `res/raw` (`host.android.rawSounds`, core change C9) as the app
+// does: the engine names it as a channel's sound and plays it for the alarm. Its file is synthesized here, a short
+// two-note chime as 16-bit PCM WAV, so the build needs no encoder.
 //
-// usage: bun packages/pinkoo-nag/test/android.mjs [--emulator <serial>] [--out <dir>] [--keep <dir>] [--only 1,12]
-//          [--fast] [--abis <abis>]
+// With `--emulator <serial>` it then installs the APK on that running emulator and drives it as a person would, with
+// real launches, `uiautomator` and `adb` (android-drive.mjs, its twelve groups). What needs a phone is checklist.md's.
+//
+// usage: bun packages/pinkoo-nag/test/android.mjs [--emulator <serial>] [--out <dir>] [--keep <dir>] [--only 1,8]
+//          [--fast] [--api33] [--abis <abis>]
 //   --abis       the fixture APK's ABIs, as `agent-android.mjs build --abis` takes them (default arm64-v8a); an
 //                x86_64 emulator, as on a CI runner, takes x86_64
 //   (ANDROID_HOME, an NDK of clang 18 or newer, and a JDK 17 or newer in JAVA_HOME; `--keep` builds in <dir> and
 //   leaves it, so a second run is warm)
-//   --only 1,12  drives only those steps of android-drive.mjs (1 runs steps 1 to 7, which build on each other);
-//                `--steps` is the same flag
-//   --fast       the fixture's 1/1-minute ladder with a 10-second ring instead of 20, step 1's dose sooner and one
-//                minute of forced Doze instead of five: about 14 minutes of driving instead of 20
-//   Both are for iterating only. Work that touches the engine is finished only after a whole run with the fixture's
-//   own timings passes: `--emulator <serial>` with neither flag.
+//   --only 1,8   drives only those groups of android-drive.mjs (each sends its own plan); `--steps` is the same flag
+//   --fast       each dose 30 to 90 s out instead of 60 to 120, and one minute of forced Doze at rest instead of five
+//   --api33      the groups an Android 12 or 13 image differs in (android-drive.mjs API33), on such an emulator: full
+//                screen allowed by default, exact alarms, no differences in the notification permission
+//   `--only` and `--fast` are for iterating only. Work that touches the engine is finished only after a whole run with
+//   the fixture's own timings passes: `--emulator <serial>` with neither flag (and `--api33` on the Android 13 image).
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -31,13 +35,28 @@ const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '..
 const argv = process.argv.slice(2), flag = (f) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : null);
 const emulator = flag('--emulator'), out = flag('--out'), keep = flag('--keep'), abis = flag('--abis');
 const only = (flag('--only') ?? flag('--steps'))?.split(',').map(Number).filter((n) => n > 0) ?? null;
-const fast = argv.includes('--fast');
+const fast = argv.includes('--fast'), api33 = argv.includes('--api33');
 const run = (cmd, args, cwd, env = process.env, ok = false) => {
   const r = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 28 });
   if (r.status !== 0 && !ok) throw new Error(`${cmd} ${args.join(' ')}: ${r.stdout.slice(-4000)}\n${r.stderr.slice(-4000)}`);
   return r.stdout;
 };
 const { check, failed } = checker();
+
+/** Sininho for the fixture: a soft two-note chime (E6 then B6, each decaying), 1 s of 16-bit mono PCM at 22.05 kHz, the
+ * same bytes every time. */
+function chime() {
+  const rate = 22050, n = rate, data = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate, note = (f, at) => (t < at ? 0 : Math.sin(2 * Math.PI * f * (t - at)) * Math.exp(-(t - at) * 5));
+    data.writeInt16LE(Math.round(0.4 * 32767 * (note(1318.51, 0) + note(1975.53, 0.18)) / 1.6), i * 2);
+  }
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0); head.writeUInt32LE(36 + data.length, 4); head.write('WAVE', 8); head.write('fmt ', 12);
+  head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22); head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34); head.write('data', 36); head.writeUInt32LE(data.length, 40);
+  return Buffer.concat([head, data]);
+}
 
 const dir = keep ? resolve(keep) : mkdtempSync(join(tmpdir(), 'pinkoo-nag-')), name = 'nagfixture', app = join(dir, name);
 try {
@@ -47,7 +66,12 @@ try {
   mkdirSync(resolve(app, 'strings'), { recursive: true });
   const strings = resolve(app, 'strings/en.json');
   writeFileSync(strings, JSON.stringify({ ...(existsSync(strings) ? JSON.parse(readFileSync(strings, 'utf8')) : {}), ...JSON.parse(readFileSync(join(here, 'fixture/strings/en.json'), 'utf8')) }, null, 2));
-  const id = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')).app.id;
+  mkdirSync(join(app, 'sounds'), { recursive: true });
+  writeFileSync(join(app, 'sounds/pinkoo_sininho.wav'), chime());
+  const appJson = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8'));
+  appJson.host = { ...appJson.host, android: { ...appJson.host?.android, rawSounds: ['sounds/pinkoo_sininho.wav'] } };
+  writeFileSync(join(app, 'app.json'), JSON.stringify(appJson, null, 2));
+  const id = appJson.app.id;
   writeFileSync(join(app, 'app.ts'), readFileSync(join(app, 'app.ts'), 'utf8').replace('__APP_ID__', id));
   const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
   manifest.dependencies = { ...manifest.dependencies, '@pinkoo/nag': `file:${pkg}` };
@@ -79,12 +103,16 @@ try {
   const dex = spawnSync('unzip', ['-p', apk, 'classes*.dex'], { maxBuffer: 1 << 28 }).stdout ?? Buffer.alloc(0);
   const absent = ['NagReceiver', 'NagSystemReceiver', 'NagService'].filter((c) => !dex.includes(`Lpinkoo/nag/${c};`));
   check('android', "the fragment's classes are compiled in under their names", !absent.length, `missing ${absent.join(', ')}`);
+  const files = spawnSync('unzip', ['-l', apk], { encoding: 'utf8', maxBuffer: 1 << 26 }).stdout ?? '';
+  const table = spawnSync('unzip', ['-p', apk, 'resources.arsc'], { maxBuffer: 1 << 28 }).stdout ?? Buffer.alloc(0);
+  const named = table.includes('pinkoo_sininho') || table.includes(Buffer.from('pinkoo_sininho', 'utf16le'));
+  check('android', 'the default preset ships as a raw resource (host.android.rawSounds)', /res\/\S*\.wav\b/.test(files) && named, files.split('\n').filter((l) => /res\/raw|\.wav/.test(l)).join('\n') || 'no raw sound');
 
   if (emulator) {
     if (out) mkdirSync(out, { recursive: true });
     // The drive speaks to adb, which knows the Android package (the app's id with `-` as `_`), not the app's id.
     const packageId = androidPackageId(JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')));
-    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id: packageId, emulator, check, run, out, only, fast }));
+    await import('./android-drive.mjs').then((m) => m.drive({ root, apk, id: packageId, emulator, check, run, out, only, fast, api33 }));
   }
 } finally {
   if (!keep) rmSync(dir, { recursive: true, force: true });

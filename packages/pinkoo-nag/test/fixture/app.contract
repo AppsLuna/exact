@@ -1,6 +1,7 @@
 // The fixture of @pinkoo/nag: the engine's names read and sent as Pinkoo does, each answer shown by testId. The data
-// module builds the plan (a dose on the next whole minute after a delay, a fast ladder) and sends it, as Pinkoo's does
-// at every resume; the nag route is where the engine's taps, its full-screen nag, the bubble and an unlock open.
+// module builds the plan of a scenario (its dose times on whole minutes, a minutes-long pace) and sends it, as Pinkoo's
+// does at every resume; the nag route is where the engine's taps, its full-screen step, the bubble, an unlock and the
+// experience test open. android-drive.mjs presses the buttons by their text and reads the lines back.
 use nagStatus, nagState, NagStatus, NagState from "@pinkoo/nag"
 
 routes nav
@@ -12,6 +13,8 @@ shape Said
 
 shape Time
   epochAtZero: number
+
+fn opt(v: option<string>): string = match v { case some(x) => x, case none => "-" }
 
 component Fixture
   state url = ""
@@ -25,54 +28,67 @@ component Fixture
     nav = go(nav, u)
   action back
     nav = back(nav)
-  action plan
-    send planned = planNags(time.epochAtZero + performanceNow(), 60, 1, 1, 20)
-  action planSoon
-    send planned = planNags(time.epochAtZero + performanceNow(), 1, 1, 1, 20)
-  // The drive's --fast mode: the same 1/1-minute ladder with a 10-second ring, the first dose sooner.
-  action planFast
-    send planned = planNags(time.epochAtZero + performanceNow(), 30, 1, 1, 10)
-  action soonFast
-    send planned = planNags(time.epochAtZero + performanceNow(), 1, 1, 1, 10)
-  action planIdle
-    send planned = planIdle(time.epochAtZero + performanceNow())
-  // Every nuisance from the first nag: the bubble and the unlock without climbing.
-  action planAll
-    send planned = planNags(time.epochAtZero + performanceNow(), 1, 1, 1, 0)
+  action plan(name: string)
+    send planned = planNags(time.epochAtZero + performanceNow(), name)
   action act(what: string)
     send acted = actNags(what, time.epochAtZero + performanceNow())
   view
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
       for e in stack(nav) key=e.id
         if e.name == "home"
-          column navigationKey=`${e.id}` position="absolute" inset=0 gap=6 padding=16
-            text `${status.available} ${status.notifications} exact=${status.exactAlarms} fsi=${status.fullScreen} overlay=${status.overlay} promoted=${status.promoted}` testId="status"
-            text doses.doses.map(d => `${d.state}:${d.ignores}:${d.rung}`).join(",") testId="doses"
-            text doses.events.map(v => v.kind).join(",") testId="events"
+          column navigationKey=`${e.id}` position="absolute" inset=0 gap=4 padding=12
+            text `${status.available} ${status.notifications} exact=${status.exactAlarms} fsi=${status.fullScreen} overlay=${status.overlay} promoted=${status.promoted} restricted=${status.backgroundRestricted} bucket=${status.standbyBucket}` testId="status"
+            // Each dose: its state, step, fires and rung.
+            text `doses ${doses.doses.map(d => `${d.state}:${opt(d.step)}:${d.fires}:${d.rung}`).join(",")}` testId="doses"
+            // Each event: its kind and reason.
+            text `events ${doses.events.map(v => `${v.kind}:${opt(v.reason)}`).join(",")}` testId="events"
+            text match doses.front { case some(f) => `front ${f.step} ${f.route}`, case none => "front -" } testId="front"
             text match planned { case some(p) => p.text, case none => "" } testId="planned"
             text match acted { case some(p) => p.text, case none => "" } testId="acted"
             text url testId="url"
-            row gap=6 flex-wrap="wrap"
-              button press=plan testId="plan"
-                text "Plan"
-              button press=planSoon testId="soon"
-                text "Soon"
-              button press=planIdle testId="idle"
+            row gap=4 flex-wrap="wrap"
+              button press=plan("thread") testId="thread"
+                text "Thread"
+              button press=plan("two") testId="two"
+                text "Two"
+              button press=plan("ontime") testId="ontime"
+                text "On time"
+              button press=plan("bubble") testId="bubble"
+                text "Bubble"
+              button press=plan("fullscreen") testId="fullscreen"
+                text "Full screen"
+              button press=plan("channels") testId="channels"
+                text "Channels"
+              button press=plan("onechannel") testId="onechannel"
+                text "One channel"
+              button press=plan("revoke") testId="revoke"
+                text "Revoke"
+              button press=plan("battery") testId="battery"
+                text "Battery"
+              button press=plan("rare") testId="rare"
+                text "Rare"
+              button press=plan("idle") testId="idle"
                 text "Idle"
-              button press=planFast testId="plan-fast"
-                text "Plan fast"
-              button press=soonFast testId="soon-fast"
-                text "Soon fast"
-              button press=planAll testId="all"
-                text "All"
+              button press=plan("soon") testId="soon"
+                text "Soon"
+              button press=plan("reboot") testId="reboot"
+                text "Reboot"
+              button press=act("resend") testId="resend"
+                text "Resend"
               button press=act("taken") testId="take"
                 text "Take"
               button press=act("promised") testId="promise"
                 text "Promise"
               button press=act("ack") testId="ack"
                 text "Ack"
-              button press=act("preview") testId="preview"
-                text "Preview"
+              button press=act("fast") testId="fast"
+                text "Fast"
+              button press=act("testNotify") testId="test-notify"
+                text "Test notify"
+              button press=act("testAlarm") testId="test-alarm"
+                text "Test alarm"
+              button press=act("testFull") testId="test-full"
+                text "Test full"
         if e.name == "nag"
           column navigationKey=`${e.id}` position="absolute" inset=0 gap=6 padding=16
             text `NAG ${e.params.group}` testId="nag-title"
@@ -86,5 +102,7 @@ component Fixture
                 text "Later"
               button press=act("leave") testId="leave"
                 text "Leave"
+              button press=act("stopTest") testId="stop-test"
+                text "Stop test"
               button press=back testId="nag-back"
                 text "Back"
