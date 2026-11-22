@@ -1,8 +1,15 @@
+@file:Suppress("DEPRECATION") // Robolectric's scheduled alarms are read by their fields
+
 package pinkoo.nag
 
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.KeyguardManager
+import android.app.Notification
 import android.content.Intent
+import android.media.AudioManager
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Looper
 import android.provider.Settings
 import dev.exact.canvas.Activations
@@ -26,23 +33,30 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.ShadowSettings
+import org.robolectric.shadows.util.DataSource
+import java.io.ByteArrayInputStream
 import java.time.Duration
 
-/** The module the app's session makes: what it does with the activity in front. */
+/** The module the app's session makes: the lock screen, what the phone allows, the experience test, the previews, the
+ * phone's sounds and Android's volume panel (items 8, 13, 16 and 18). */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE, shadows = [ExtensionInvokeTest.Host::class])
 @LooperMode(LooperMode.Mode.PAUSED)
-internal class NagModuleTest : EngineCase() {
+internal class NagModuleTest : SurfaceCase() {
     private lateinit var activity: Activity
     private var module: NagModule? = null
-    private val pillB = NagFixtures.dose("b@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T20:00", "Pill B")
+    private val pillA = dose("a@2026-11-18T08:00", "2026-11-18T08:00", name = "Pill A")
+    private val pillB = dose("b@2026-11-18T08:00", "2026-11-18T08:00", name = "Pill B")
+    private val volumes = ArrayList<Int>()
 
     @Before fun show() {
         activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         Extensions.front = { activity }
         Extensions.started()
         Extensions.resumed()
+        NagModule.volumePanel = { _, stream -> volumes += stream }
     }
 
     @After fun leave() {
@@ -50,7 +64,8 @@ internal class NagModuleTest : EngineCase() {
         Extensions.paused()
         Extensions.stopped(false)
         Extensions.front = { Exact.reader?.get() }
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+        phone(locked = false, on = true)
+        NagModule.volumePanel = { a, stream -> a.adjustStreamVolume(stream, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI) }
     }
 
     private fun made() = NagModule(ExtensionContext(app, "nag")).also { module = it }
@@ -60,34 +75,23 @@ internal class NagModuleTest : EngineCase() {
     private fun ask(name: String, args: JSONObject): JSONObject { var r: JSONObject? = null; module!!.later(name, args) { r = it }; return r!! }
     private fun keysOf(vararg d: JSONObject) = JSONObject().put("keys", JSONArray(d.map { it.getString("key") }))
     private val overLock get() = shadowOf(activity).showWhenLocked
-    private fun ignored() = Store.events(app).filter { it.kind == "ignored" }
+    private val alarmManager get() = app.getSystemService(AlarmManager::class.java)
+    private fun test(): android.service.notification.StatusBarNotification? = shown(Shade.TEST)
+    private fun rehearsal(step: String, after: Long = 0, quiet: Boolean = false, sound: String = "kalimba") = JSONObject()
+        .put("step", step).put("after", after).put("quiet", quiet).put("title", "Pinkoo test").put("body", "This is how I remind you")
+        .put("line", "Here I am!").put("publicTitle", "Pinkoo · Reminder test").put("stop", "Stop").put("channel", "Reminder · Kalimba")
+        .put("mascot", mascot("#FF7A59")).put("sound", sound).put("volume", 0.6).put("route", "/nag/test?via=test&step=$step")
+    private fun rehearseAlarms() = shadowOf(alarmManager).scheduledAlarms.filter { shadowOf(it.operation).savedIntent.action == Rehearsal.ACTION }
 
-    /** Pill A's 08:00 nag rung by the alarm and played by the service, with the app in front. */
-    private fun ringing(first: Int = 20, repeat: Int = 15) {
-        made()
-        Engine.schedule(app, NagFixtures.plan(pillA, first = first, repeat = repeat), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        assertNotNull(NagService.running)
-    }
-
-    /**
-     * The module is made at the first frame, after the activity resumed: a tap on the nag notification that brings the
-     * activity back through the alias resumes it before any module hears of it (measured: the bubble stayed over the
-     * nag route). Made while the activity is resumed, the module hides the bubble at once.
-     */
+    /** The module is made at the first frame, after the activity resumed: made while it is resumed, the bubble hides at
+     * once (a tap through the notification's alias resumes it before any module hears of it). */
     @Test fun aModuleMadeWhileTheActivityIsResumedHidesTheBubble() {
         ShadowSettings.setCanDrawOverlays(true)
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        climb(2)
+        out().bubble(post(2, Step.AGAIN, bubble = true))
         assertTrue(Bubble.shown)
         made()
         assertFalse(Bubble.shown)
-        module!!.paused()
-        assertTrue(Bubble.shown)
-        module!!.resumed()
-        assertFalse(Bubble.shown)
+        assertTrue(Engine.appInFront)
     }
 
     /** A module that goes (its session ended) after the next one was made leaves the activity's state alone. */
@@ -98,40 +102,32 @@ internal class NagModuleTest : EngineCase() {
         assertTrue(Engine.appInFront)
     }
 
-    /**
-     * Decision 5: confirmed over the lock screen (the full-screen nag showed the route over the keyguard), the route
-     * celebrates as long as its celebration lasts, says when it ends, and the keyguard covers the app again then. Only
-     * once nothing of the nag is left: one medication confirmed of two keeps it; a new nag shown meanwhile keeps it too.
-     */
+    // MARK: the lock screen (the celebration, `leaveLockScreen`)
+
+    /** Confirmed over the lock screen, the route celebrates, says when it ends, and the keyguard covers the app again
+     * then; only once nothing of the reminder is left: one medication confirmed of two keeps it. */
     @Test fun confirmedOverTheLockScreenTheKeyguardComesBackWhenTheCelebrationEnds() {
-        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Engine.schedule(app, planJson(pillA, pillB), at("2026-11-18T07:00"))
+        phone(locked = true, on = true)
         Activations.overLock(activity, true)
         made()
-        send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf(pillA.getString("key"), pillB.getString("key")))))
-        send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
+        send("nagScreen", JSONObject().put("showing", true).put("keys", keysOf(pillA, pillB).getJSONArray("keys")))
+        send("resolveNags", keysOf(pillA).put("kind", "taken"))
         idle(6_000)
         assertTrue("pill B is still to confirm", overLock)
-        send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillB.getString("key")))).put("kind", "taken"))
-        // The beads on the nag take about 4.3 s from the seal: longer than the old 3 s, so nothing cuts them now.
+        send("resolveNags", keysOf(pillB).put("kind", "taken"))
         idle(4_300)
         assertTrue("the celebration still shows", overLock)
-        val left = ask("leaveLockScreen", JSONObject().put("after", 0))
-        assertTrue("the route keeps its last frame: the keyguard is coming", left.getBoolean("locking"))
+        assertTrue(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
         idle(1)
         assertFalse("the keyguard covers the app again", overLock)
     }
 
-    /** A route that never says its celebration ended is covered at the cap, 5 s after the confirmation. */
+    /** A route that never says its celebration ended is covered at the cap; said late, the keyguard is still on its way
+     * and the route keeps its frame. */
     @Test fun aCelebrationThatNeverEndsIsCoveredAtTheCap() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        Engine.schedule(app, planJson(pillA), at("2026-11-18T07:00"))
+        phone(locked = true, on = true)
         Activations.overLock(activity, true)
         made()
         send("resolveNags", keysOf(pillA).put("kind", "taken"))
@@ -139,322 +135,96 @@ internal class NagModuleTest : EngineCase() {
         assertTrue(overLock)
         idle(200)
         assertFalse(overLock)
-        // Said late, after the cap: the keyguard is still on its way. Android pauses the activity at once but shows it
-        // until it sleeps, so the route keeps its frame (seen on the device: a two-dose nag's last celebration outlasted
-        // the cap, the answer was false, and Today showed over the lock screen for about 2 s).
         Extensions.paused()
         assertTrue(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
-        // In front again (she unlocked), it leaves as usual.
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
+        phone(locked = false, on = true)
         Extensions.resumed()
         assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
     }
 
-    /**
-     * "Agora não" over the lock screen: the route says it is done and keeps its frame while the keyguard comes back
-     * (nothing of Today under it shows there). The wait asked is capped as a celebration is.
-     */
-    @Test fun leavingTheLockScreenHandsItBackToTheKeyguard() {
-        ringing()
-        clock += 10_000
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
-        Activations.overLock(activity, true)
-        send("ignoreNags", keysOf(pillA))
-        idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertTrue("an ignore leaves the nag open: nothing hands back by itself", overLock)
-        assertTrue(ask("leaveLockScreen", JSONObject().put("after", 60_000)).getBoolean("locking"))
-        idle(NagModule.CELEBRATE_MAX_MS - 100)
-        assertTrue(overLock)
-        idle(200)
-        assertFalse(overLock)
-    }
-
-    /** Unlocked (she unlocked over the nag, or it never showed over the keyguard), nothing is handed back: the route
-     * leaves as usual. */
+    /** Unlocked, nothing is handed back: the route leaves as usual. */
     @Test fun leavingWhenUnlockedChangesNothing() {
         made()
         Activations.overLock(activity, true)
         assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
         idle(NagModule.CELEBRATE_MAX_MS + 100)
         assertTrue(overLock)
-        // Locked, but the app not in front: nothing to hand back either.
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
-        Extensions.paused()
-        assertFalse(ask("leaveLockScreen", JSONObject().put("after", 0)).getBoolean("locking"))
     }
 
-    @Test fun aPromiseOverTheLockScreenGoesBackToItTooButNotWhenUnlocked() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        val keyguard = shadowOf(app.getSystemService(KeyguardManager::class.java))
-        keyguard.setKeyguardLocked(true)
-        Activations.overLock(activity, true)
-        made()
-        send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "promised").put("until", clock + 600_000))
-        idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertFalse(overLock)
-        // Unlocked, nothing is dropped behind her back: the root clears the flags when the route closes.
-        Activations.overLock(activity, true)
-        keyguard.setKeyguardLocked(false)
-        Engine.schedule(app, NagFixtures.plan(pillA, made = clock + 1), clock + 1)
-        send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
-        idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertTrue(overLock)
-    }
-
-    /**
-     * Two doses over the lock screen: a promise on the first leaves the second to answer, so the keyguard stays away
-     * while the route moves on to it (the review's lock-screen run: it came back ~10 s after the promise, with the
-     * other dose unanswered). Answering the second hands the screen back.
-     */
+    /** A promise on one of two doses over the lock screen keeps the route for the other; answering it hands the screen
+     * back. */
     @Test fun aPromiseOnOneOfTwoDosesOverTheLockScreenKeepsTheRouteForTheOther() {
-        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
+        Engine.schedule(app, planJson(pillA, pillB), at("2026-11-18T07:00"))
         clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        phone(locked = true, on = true)
         Activations.overLock(activity, true)
         made()
-        send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf(pillA.getString("key"), pillB.getString("key")))))
         send("resolveNags", keysOf(pillA).put("kind", "promised").put("until", clock + 600_000))
         idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertTrue("the other dose is still open: the route stays over the lock screen", overLock)
-        assertEquals("pending", group().state)
+        assertTrue("the other dose is still open", overLock)
         send("resolveNags", keysOf(pillB).put("kind", "taken"))
         idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertFalse("nothing of that nag left: the keyguard comes back", overLock)
-        assertEquals("promised", group().state)
+        assertFalse(overLock)
     }
 
-    @Test fun aNewNagShownDuringTheCelebrationKeepsTheRouteOverTheLockScreen() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
-        Activations.overLock(activity, true)
+    // MARK: what the phone allows (item 13)
+
+    /** `nagStatus` gains the ringer mode, each stream's level over its maximum, Do Not Disturb's hints and each reminder
+     * channel read back. */
+    @Test fun theStatusReadsTheRingerTheVolumesDoNotDisturbAndTheChannels() {
+        val audio = app.getSystemService(AudioManager::class.java)
+        audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+        shadowOf(audio).setStreamMaxVolume(20)
+        audio.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 4, 0)
+        audio.setStreamVolume(AudioManager.STREAM_ALARM, 5, 0)
+        Shade.channels(app, plan())
         made()
-        send("resolveNags", JSONObject().put("keys", JSONArray(listOf(pillA.getString("key")))).put("kind", "taken"))
-        idle(1_000)
-        send("nagScreen", JSONObject().put("showing", true).put("keys", JSONArray(listOf("x@2026-11-18T08:01"))))
-        idle(NagModule.CELEBRATE_MAX_MS + 100)
-        assertTrue(overLock)
+        val s = ask("nagStatus", JSONObject())
+        assertEquals("vibrate", s.getString("ringerMode"))
+        assertEquals(0.2, s.getDouble("notificationVolume"), 0.001)
+        assertEquals(0.25, s.getDouble("alarmVolume"), 0.001)
+        assertTrue(s.getBoolean("dndAllowsReminders"))
+        assertTrue(s.getBoolean("dndAllowsAlarms"))
+        val channels = s.getJSONArray("channels").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+        assertEquals(listOf("sininho"), channels.map { it.getString("sound") })
+        assertTrue(channels.all { it.getInt("importance") == android.app.NotificationManager.IMPORTANCE_HIGH && !it.getBoolean("blocked") && !it.getBoolean("changed") })
+        nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_NONE)
+        val quiet = ask("nagStatus", JSONObject())
+        assertFalse(quiet.getBoolean("dndAllowsReminders"))
+        assertFalse(quiet.getBoolean("dndAllowsAlarms"))
+        nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS)
+        val alarms = ask("nagStatus", JSONObject())
+        assertFalse(alarms.getBoolean("dndAllowsReminders"))
+        assertTrue(alarms.getBoolean("dndAllowsAlarms"))
+        nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL)
     }
 
-    // MARK: the nag screen's "Not now" (`ignoreNags`)
+    // MARK: Android's pages (item 18 and the rest)
 
-    /**
-     * The full-screen nag opened the route (its ring stopped, nothing climbed), then "Agora não": the nag's one ignore.
-     * It climbs one rung, the next loud nag counts from the tap, and the notification stays, silent. The app reads the
-     * same rung, and records the event as its own `not_now`.
-     */
-    @Test fun theNagScreensNotNowIsTheNagsIgnoreAndTheNextNagCountsFromIt() {
-        ringing()
-        clock += 10_000
-        send("nagScreen", JSONObject().put("showing", true).put("keys", keysOf(pillA).getJSONArray("keys")))
-        assertEquals(0, group().ignores)
-        clock += 20_000
-        val tapped = clock
-        assertFalse(ask("ignoreNags", keysOf(pillA)).has("error"))
-        assertEquals(1, group().ignores)
-        assertEquals("pending", group().state)
-        assertEquals("ignored", Store.events(app).last().kind)
-        assertEquals("notNow", Store.events(app).last().reason)
-        assertEquals(tapped, Store.events(app).last().at)
-        assertEquals("Standard: 20 minutes after the tap", tapped + 20 * 60_000L, group().nextAt)
-        assertEquals(tapped + 20 * 60_000L, alarms.nextAlarmClock.triggerTime)
-        assertNull("nothing rings", NagService.running)
-        assertEquals("the notification stays, silent", Shade.CH_WAITING, nag()?.notification?.channelId)
-        val dose = ask("nagState", JSONObject()).getJSONArray("doses").getJSONObject(0)
-        assertEquals(listOf("pending", 1, 1, tapped + 20 * 60_000L), listOf(dose.getString("state"), dose.getInt("ignores"), dose.getInt("rung"), dose.getLong("nextAt")))
-    }
-
-    /** Decision A: one ignore per nag. A second "Agora não" before the next nag counts nothing; the next nag's own does. */
-    @Test fun aSecondNotNowForTheSameNagCountsNothing() {
-        ringing()
-        clock += 30_000
-        val tapped = clock
-        send("ignoreNags", keysOf(pillA))
-        clock += 60_000
-        assertFalse(ask("ignoreNags", keysOf(pillA)).has("error"))
-        assertEquals(1, group().ignores)
-        assertEquals(tapped + 20 * 60_000L, group().nextAt)
-        assertEquals(tapped + 20 * 60_000L, alarms.nextAlarmClock.triggerTime)
-        assertEquals(1, ignored().size)
-        clock = group().nextAt!!
-        Engine.fire(app, clock)
-        serve()
-        clock += 5_000
-        send("ignoreNags", keysOf(pillA))
-        assertEquals(2, group().ignores)
-        assertEquals("then every repeat from each ignore", clock + 15 * 60_000L, group().nextAt)
-    }
-
-    /** Standard (20 then 15), Gentle (30 then 20) and Insistent (10 then 5): each next nag at the tap plus the wait. */
-    @Test fun eachLadderCountsTheNextNagFromTheTap() {
-        for ((name, first, repeat) in listOf(Triple("Standard", 20, 15), Triple("Gentle", 30, 20), Triple("Insistent", 10, 5))) {
-            NagFixtures.clear(app)
-            Shade.forget()
-            module?.destroy {}
-            ringing(first = first, repeat = repeat)
-            for (n in 1..3) {
-                if (n > 1) { Engine.fire(app, clock); serve() }
-                clock += 7_000
-                send("ignoreNags", keysOf(pillA))
-                val wait = (if (n == 1) first else repeat) * 60_000L
-                assertEquals("$name after $n", n, group().ignores)
-                assertEquals("$name after $n", clock + wait, group().nextAt)
-                assertEquals("$name after $n", clock + wait, alarms.nextAlarmClock.triggerTime)
-                clock += wait
-            }
-        }
-    }
-
-    /** A nag swiped away already took its ignore: "Agora não" on it counts nothing, and a swipe after the tap neither. */
-    @Test fun aSwipeAndTheButtonShareTheNagsOneIgnore() {
-        ringing()
-        clock += 5_000
-        val swiped = clock
-        NagReceiver().onReceive(app, Intent(NagReceiver.DISMISS).putExtra("nag", group().nag))
-        assertEquals(1, group().ignores)
-        clock += 30_000
-        send("nagScreen", JSONObject().put("showing", true).put("keys", keysOf(pillA).getJSONArray("keys")))
-        send("ignoreNags", keysOf(pillA))
-        assertEquals(1, group().ignores)
-        assertEquals("still counted from the swipe", swiped + 20 * 60_000L, group().nextAt)
-        // The next nag: the button first, then a swipe of its silent notification.
-        clock = group().nextAt!!
-        Engine.fire(app, clock)
-        serve()
-        clock += 10_000
-        val tapped = clock
-        send("ignoreNags", keysOf(pillA))
-        clock += 10_000
-        NagReceiver().onReceive(app, Intent(NagReceiver.DISMISS).putExtra("nag", group().nag))
-        assertEquals(2, group().ignores)
-        assertEquals(tapped + 15 * 60_000L, group().nextAt)
-        assertEquals(listOf("swipe", "notNow"), ignored().map { it.reason })
-    }
-
-    /** Pressed while it still rings (the route was not told it showed), the ignore ends the ring itself. */
-    @Test fun aNotNowWhileItStillRingsEndsTheRing() {
-        ringing()
-        clock += 15_000
-        send("ignoreNags", keysOf(pillA))
-        assertNull(NagService.running)
-        assertEquals(1, group().ignores)
-        assertEquals(Shade.CH_WAITING, nag()?.notification?.channelId)
-    }
-
-    /** A ring that ran out unheard (nothing timed it out yet) was the nag's ignore at its end, as the app's catch-up
-     * counts it: the button after it counts nothing, and the next nag counts from the ring's end. */
-    @Test fun aNotNowAfterTheRingRanOutCountsItsTimeoutAsTheAppDoes() {
+    /** "Ajustar no Android": Android's own volume panel for the notification stream or the alarm's, shown without
+     * changing it; nothing opens. */
+    @Test fun theVolumeShowsAndroidsPanelForEachStream() {
         made()
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        Engine.fire(app, at("2026-11-18T08:00"))
-        clock = at("2026-11-18T08:01") + 30_000
-        send("ignoreNags", keysOf(pillA))
-        assertEquals(1, group().ignores)
-        assertEquals(listOf("timeout" to at("2026-11-18T08:01")), ignored().map { it.reason to it.at })
-        assertEquals(at("2026-11-18T08:21"), group().nextAt)
+        val before = app.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM)
+        assertTrue(ask("requestNagAccess", JSONObject().put("what", "volume").put("stream", "notification")).getBoolean("available"))
+        send("requestNagAccess", JSONObject().put("what", "volume").put("stream", "alarm"))
+        assertEquals(listOf(AudioManager.STREAM_NOTIFICATION, AudioManager.STREAM_ALARM), volumes)
+        assertEquals(before, app.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM))
+        assertNull(shadowOf(activity).nextStartedActivityForResult)
     }
 
-    /** Nothing to ignore is no error: keys the engine does not know, none, a promised dose, or no plan yet. */
-    @Test fun aNotNowWithNothingToIgnoreIsRefusedSoftly() {
-        ringing()
-        clock += 10_000
-        assertFalse(ask("ignoreNags", JSONObject().put("keys", JSONArray(listOf("nope@2026-11-18T08:00")))).has("error"))
-        assertFalse(ask("ignoreNags", JSONObject()).has("error"))
-        assertEquals(0, group().ignores)
-        assertEquals("ringing", group().state)
-        assertNotNull("it rings on", NagService.running)
-        send("resolveNags", keysOf(pillA).put("kind", "promised").put("until", clock + 600_000))
-        send("ignoreNags", keysOf(pillA))
-        assertEquals("promised", group().state)
-        assertEquals(0, group().ignores)
-        assertTrue(ignored().isEmpty())
-        NagFixtures.clear(app)
-        assertFalse(ask("ignoreNags", keysOf(pillA)).has("error"))
-    }
-
-    // MARK: the ring test ("Testar o toque") and the sound page
-
-    private fun preview(after: Long) = send("previewNag", JSONObject().put("rung", 0).put("after", after).put("title", "Ring test")
-        .put("body", "This is how I call you").put("route", "/settings/health"))
-    private fun previewShown() = nm.activeNotifications.firstOrNull { it.id == Shade.PREVIEW }
-
-    /**
-     * Decision: "Testar o toque" fires the real full-screen nag 5 s later, so she may lock the phone meanwhile. With the
-     * app not in front it is a loud notification on the nag channel whose full-screen intent opens the test's screen
-     * over the keyguard; it is never a dose: no event, no state, no alarm of the chain. Answered, it goes.
-     */
-    @Test fun theRingTestIsTheRealFullScreenNagFiveSecondsLaterAndNoDose() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        val chain = alarms.nextAlarmClock?.triggerTime
-        val state = Store.state(app).groups.mapValues { it.value.state to it.value.ignores }
+    /** A blocked or changed reminder channel opens Android's page for that channel. */
+    @Test fun aChannelOpensItsOwnPage() {
+        Shade.channels(app, plan())
         made()
-        Extensions.paused()
-        Extensions.stopped(false)
-        preview(5_000)
-        idle(4_900)
-        assertNull("not yet", previewShown())
-        idle(200)
-        val n = previewShown()
-        assertNotNull("the full-screen nag", n)
-        assertEquals(Shade.CH_NAG, n!!.notification.channelId)
-        assertEquals("its full-screen nag, where allowed", FullScreen.allowed(app), n.notification.fullScreenIntent != null)
-        assertNotNull("a tap opens it too", n.notification.contentIntent)
-        assertEquals(android.app.Notification.CATEGORY_ALARM, n.notification.category)
-        assertEquals("Ring test", n.notification.extras.getString(android.app.Notification.EXTRA_TITLE))
-        assertTrue("no event", Store.events(app).isEmpty())
-        assertEquals("no dose moved", state, Store.state(app).groups.mapValues { it.value.state to it.value.ignores })
-        assertEquals("the chain's alarm untouched", chain, alarms.nextAlarmClock?.triggerTime)
-        assertTrue("no nag notification", nags().isEmpty())
-        send("stopNagPreview", JSONObject())
-        assertNull("answered: it goes", previewShown())
-    }
-
-    /** With the app in front, the screen she is on shows the ring itself: only the ring, no notification over it. */
-    @Test fun withTheAppInFrontTheRingTestOnlyRings() {
-        made()
-        preview(5_000)
-        idle(5_100)
-        assertNull(previewShown())
-    }
-
-    /** Unanswered, the test rings out; over the lock screen the keyguard comes back then. Cancelled before it rings,
-     * nothing comes. */
-    @Test fun anUnansweredRingTestEndsByItselfAndACancelledOneNeverComes() {
-        made()
-        Extensions.paused()
-        preview(5_000)
-        idle(5_100)
-        assertNotNull(previewShown())
-        shadowOf(app.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
-        Extensions.resumed()
-        Activations.overLock(activity, true)
-        idle(NagModule.PREVIEW_RING_MS)
-        assertNull(previewShown())
-        assertFalse("the keyguard covers it again", overLock)
-        Extensions.paused()
-        preview(5_000)
-        idle(1_000)
-        send("stopNagPreview", JSONObject())
-        idle(10_000)
-        assertNull(previewShown())
-    }
-
-    /** The ring test's "Didn't hear it" opens Android's sound settings. */
-    @Test fun soundOpensAndroidsSoundSettings() {
-        made()
-        send("requestNagAccess", JSONObject().put("what", "sound"))
+        send("requestNagAccess", JSONObject().put("what", "channel").put("sound", "kalimba"))
         idle(1)
-        assertEquals(Settings.ACTION_SOUND_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
+        val i = shadowOf(activity).nextStartedActivityForResult.intent
+        assertEquals(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, i.action)
+        assertEquals("pinkoo.remind.kalimba", i.getStringExtra(Settings.EXTRA_CHANNEL_ID))
     }
 
-    /** Tocar na hora's Do Not Disturb fix opens Do Not Disturb's own page (Modes from Android 15). */
+    /** Como eu te lembro's Do Not Disturb card opens Do Not Disturb's own page (Modes from Android 15)... */
     @Test fun dndOpensDoNotDisturbsPage() {
         made()
         send("requestNagAccess", JSONObject().put("what", "dnd"))
@@ -462,7 +232,7 @@ internal class NagModuleTest : EngineCase() {
         assertEquals(NagModule.ZEN_MODE_SETTINGS, shadowOf(activity).nextStartedActivityForResult?.intent?.action)
     }
 
-    /** Where no app opens Do Not Disturb's page, the fix opens Android's sound page instead. */
+    /** ...and Android's sound page where no app opens that one. */
     @Test fun dndFallsBackToTheSoundPage() {
         val settings = android.content.pm.ResolveInfo().apply {
             activityInfo = android.content.pm.ActivityInfo().apply { packageName = "com.android.settings"; name = "Sound" }
@@ -477,5 +247,180 @@ internal class NagModuleTest : EngineCase() {
         } finally {
             shadowOf(app).checkActivities(false)
         }
+    }
+
+    /** "Voltar pro {som}": a new version of the sound's channel, as Pinkoo sets it. */
+    @Test fun renewMakesANewVersionOfTheChannel() {
+        Engine.schedule(app, planJson(), at("2026-11-18T07:00"))
+        Shade.channels(app, plan())
+        made()
+        send("renewNagChannel", JSONObject().put("sound", "sininho"))
+        assertNotNull(nm.getNotificationChannel("pinkoo.remind.sininho.v2"))
+        assertNull(nm.getNotificationChannel("pinkoo.remind.sininho"))
+        assertEquals("Reminder · Sininho", nm.getNotificationChannel("pinkoo.remind.sininho.v2").name.toString())
+    }
+
+    // MARK: the phone's sounds (item 8)
+
+    /** "Um som do celular": Android's picker for notification sounds, without "silent" or "default"; a sound Pinkoo's
+     * own process can read answers its address and title; one it can't is refused; a back press is cancelled. */
+    @Test fun thePhonesSoundPickerAnswersAReadableSoundOrRefusesIt() {
+        made()
+        val answers = ArrayList<JSONObject>()
+        val readable = Uri.parse("content://media/internal/audio/media/12")
+        shadowOf(app.contentResolver).registerInputStream(readable, ByteArrayInputStream(byteArrayOf(1, 2, 3)))
+        for (uri in listOf(readable, Uri.parse("content://media/external/audio/media/99"), null)) {
+            module!!.later("pickNagSound", JSONObject().put("current", "sininho").put("title", "Reminder sound")) { answers += it }
+            idle(1)
+            val started = shadowOf(activity).nextStartedActivityForResult
+            assertEquals(RingtoneManager.ACTION_RINGTONE_PICKER, started.intent.action)
+            assertEquals(RingtoneManager.TYPE_NOTIFICATION, started.intent.getIntExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, -1))
+            assertFalse(started.intent.getBooleanExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true))
+            assertFalse(started.intent.getBooleanExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true))
+            val data = uri?.let { Intent().putExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, it) }
+            Extensions.activityResult(started.requestCode, if (uri == null) Activity.RESULT_CANCELED else Activity.RESULT_OK, data)
+        }
+        assertEquals(listOf("picked", "unreadable", "cancelled"), answers.map { it.getString("status") })
+        assertEquals(readable.toString(), answers[0].getString("sound"))
+    }
+
+    // MARK: the experience test (item 16)
+
+    /**
+     * "Ver como é" for Notificação: her real channel (made on the spot, as from the onboarding before any plan), public
+     * with "Parar" (the test's own stop, never the core's), a delete intent and a 15 s timeout. Nothing is recorded:
+     * no state, no event, no alarm of the chain.
+     */
+    @Test fun theNotificationTestPostsOnHerChannelAndRecordsNothing() {
+        made()
+        send("rehearse", rehearsal("notify"))
+        val n = test()!!.notification
+        assertEquals("pinkoo.remind.kalimba", n.channelId)
+        assertEquals("Reminder · Kalimba", nm.getNotificationChannel("pinkoo.remind.kalimba").name.toString())
+        assertEquals(Notification.VISIBILITY_PUBLIC, n.visibility)
+        assertEquals("Pinkoo test", n.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(Rehearsal.NOTIFY_MS, n.timeoutAfter)
+        assertEquals(listOf("Stop"), n.actions.map { it.title.toString() })
+        assertEquals(Rehearsal.STOP, shadowOf(n.actions[0].actionIntent).savedIntent.action)
+        assertEquals(Rehearsal.STOP, shadowOf(n.deleteIntent).savedIntent.action)
+        assertTrue("no event", Store.events(app).isEmpty())
+        assertNull("no state", Store.plan(app))
+        assertTrue("no alarm of the chain", shadowOf(alarmManager).scheduledAlarms.isEmpty())
+        // "Parar".
+        NagReceiver().onReceive(app, shadowOf(n.actions[0].actionIntent).savedIntent)
+        assertNull(test())
+        // "Testar sem som": the "Só vibrar" channel, since a channel's sound is fixed.
+        send("rehearse", rehearsal("notify", quiet = true))
+        assertEquals("pinkoo.remind.vibrate", test()!!.notification.channelId)
+        send("stopRehearsal", JSONObject())
+        assertNull(test())
+    }
+
+    /** "Em 5 s": the wait is an exact alarm under the test's own request code, which wakes a frozen app; stopped
+     * before it, nothing comes. */
+    @Test fun aTestsWaitIsItsOwnExactAlarm() {
+        made()
+        send("rehearse", rehearsal("notify", after = 5_000))
+        assertNull(test())
+        val wait = rehearseAlarms().single()
+        assertEquals(AlarmManager.RTC_WAKEUP, wait.type)
+        assertTrue(wait.allowWhileIdle)
+        assertNull("nothing of the chain", alarmManager.nextAlarmClock)
+        NagReceiver().onReceive(app, shadowOf(wait.operation).savedIntent)
+        assertEquals("pinkoo.remind.kalimba", test()!!.notification.channelId)
+        send("rehearse", rehearsal("notify", after = 5_000))
+        send("stopRehearsal", JSONObject())
+        assertTrue(rehearseAlarms().isEmpty())
+        assertNull(test())
+    }
+
+    /** Bolinha's test: the real bubble with its line, over her apps (once she leaves Pinkoo), for 20 s. */
+    @Test fun theBubbleTestShowsTheBubbleForTwentySeconds() {
+        ShadowSettings.setCanDrawOverlays(true)
+        made()
+        val shown = android.os.SystemClock.uptimeMillis()
+        send("rehearse", rehearsal("bubble"))
+        assertFalse("not over Pinkoo itself", Bubble.shown)
+        // She leaves the app to see it.
+        Extensions.paused()
+        module!!.paused()
+        assertTrue(Bubble.shown)
+        // Making the service plays the wiggle on Robolectric's clock (about 1.2 s).
+        assertNotNull("the service holds it", serve())
+        idle(shown + Rehearsal.BUBBLE_MS - 500 - android.os.SystemClock.uptimeMillis())
+        assertTrue(Bubble.shown)
+        idle(1_000)
+        assertFalse(Bubble.shown)
+        assertNull(NagService.running)
+    }
+
+    /** Tela cheia's test is counted from the screen turning off: 5 s after it, the nag route in test mode over the
+     * keyguard (the silent channel, its full-screen intent). */
+    @Config(sdk = [33])
+    @Test fun theFullScreenTestComesFiveSecondsAfterTheScreenGoesOff() {
+        made()
+        send("rehearse", rehearsal("full"))
+        assertTrue(listens(Intent.ACTION_SCREEN_OFF))
+        assertTrue(rehearseAlarms().isEmpty())
+        broadcast(Intent.ACTION_SCREEN_OFF)
+        val wait = rehearseAlarms().single()
+        assertTrue(kotlin.math.abs(System.currentTimeMillis() + Rehearsal.FULL_AFTER_OFF_MS - wait.triggerAtTime) < 1_000)
+        NagReceiver().onReceive(app, shadowOf(wait.operation).savedIntent)
+        val n = test()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertNotNull(n.fullScreenIntent)
+        assertFalse("its screen signal goes", listens(Intent.ACTION_SCREEN_OFF))
+    }
+
+    /** With no screen-off within 15 s, the step comes as with the phone in use: her reminder, a heads-up. */
+    @Test fun theFullScreenTestFallsBackToTheReminderWhenThePhoneStaysInUse() {
+        made()
+        send("rehearse", rehearsal("full"))
+        idle(Rehearsal.FULL_IN_USE_MS + 100)
+        assertEquals("pinkoo.remind.kalimba", test()!!.notification.channelId)
+        assertFalse(listens(Intent.ACTION_SCREEN_OFF))
+    }
+
+    /**
+     * Alarme's test: the ring service starts at the call while Pinkoo shows (Android allows that start in front), the
+     * sample rings at its time with the alarm's public notification and "Parar", for at most 10 s. The screen turning
+     * off before its sound stops nothing ("Em 5 s, pra eu bloquear"). Nothing is told to the core.
+     */
+    @Test fun theAlarmTestRingsAtMostTenSecondsInTheServiceStartedInFront() {
+        ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(app, Settings.System.DEFAULT_ALARM_ALERT_URI), ShadowMediaPlayer.MediaInfo(600_000, 0))
+        made()
+        send("rehearse", rehearsal("alarm", after = 5_000))
+        assertNotNull("started in front", serve())
+        broadcast(Intent.ACTION_SCREEN_OFF)
+        NagReceiver().onReceive(app, shadowOf(rehearseAlarms().single().operation).savedIntent)
+        assertTrue(NagService.ring!!.test)
+        val n = test()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertEquals(Notification.VISIBILITY_PUBLIC, n.visibility)
+        assertEquals(listOf("Stop"), n.actions.map { it.title.toString() })
+        idle(NagService.TEST_MS + 100)
+        assertNull("rang out", NagService.ring)
+        assertNull(test())
+        assertNull(NagService.running)
+        assertTrue("nothing told to the core", told.isEmpty())
+    }
+
+    // MARK: the previews (item 16)
+
+    /** A sound previews only in front: a phone sound through a player on the notification stream; with the app not in
+     * in front, nothing plays. */
+    @Test fun aPreviewPlaysOnlyInFront() {
+        val sound = "content://media/internal/audio/media/12"
+        ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(app, Uri.parse(sound)), ShadowMediaPlayer.MediaInfo(2_000, 0))
+        made()
+        send("previewSound", JSONObject().put("sound", sound).put("usage", "notification").put("volume", 1.0))
+        val player = Preview::class.java.getDeclaredField("player").apply { isAccessible = true }.get(Preview) as android.media.MediaPlayer?
+        assertNotNull(player)
+        assertEquals(android.media.AudioAttributes.USAGE_NOTIFICATION, shadowOf(player!!).audioAttributes?.usage ?: android.media.AudioAttributes.USAGE_NOTIFICATION)
+        module!!.paused()
+        Extensions.paused()
+        send("previewSound", JSONObject().put("sound", sound).put("usage", "notification").put("volume", 1.0))
+        assertNull(Preview::class.java.getDeclaredField("player").apply { isAccessible = true }.get(Preview))
     }
 }

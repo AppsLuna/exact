@@ -49,19 +49,6 @@ internal abstract class EngineCase {
     /** Whether the unlock nuisance listens. */
     protected fun listensToUnlock(): Boolean = shadowOf(app).registeredReceivers.any { it.intentFilter.hasAction(Intent.ACTION_USER_PRESENT) }
 
-    /** Rings and ignores [times] nags of [pillA]'s group from 08:00, each run by the service: it reaches rung [times]. */
-    protected fun climb(times: Int): Long {
-        var t = at("2026-11-18T08:00")
-        repeat(times) {
-            clock = t
-            Engine.fire(app, t)
-            serve()
-            Engine.ignore(app, group().nag, "notNow", t + 1_000)
-            t = group().nextAt!!
-        }
-        return t
-    }
-
     @Before fun setUpEngine() {
         TimeZone.setDefault(TimeZone.getTimeZone("America/Sao_Paulo"))
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
@@ -84,7 +71,7 @@ internal abstract class EngineCase {
         Bubble.hide()
         Engine.appInFront = false
         Engine.screen = emptySet()
-        Unlock.apply(app, Live(Plan.parse(NagFixtures.plan()), State()), on = false)
+        Unlock.stop(app)
         TimeZone.setDefault(zone)
         NagFixtures.clear(app)
         Shade.forget()

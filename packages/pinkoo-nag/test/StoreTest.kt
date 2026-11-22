@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import java.io.File
@@ -13,10 +14,11 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
-internal class StoreTest : EngineCase() {
+internal class StoreTest : CoreCase() {
     private val pillB = NagFixtures.dose("b@2026-11-18T12:00", "2026-11-18T12:00", "2026-11-18T20:00", "Pill B")
     private fun breakState() = File(File(app.createDeviceProtectedStorageContext().filesDir, "pinkoo.nag"), "state.json").writeText("{\"groups\": [")
     private fun ids() = Store.events(app).map { it.id }
+    private fun step(): Long? = shadowOf(alarms).scheduledAlarms.firstOrNull { it.operation != null && shadowOf(it.operation).requestCode == Chain.STEP }?.triggerAtTime
 
     /**
      * The app records each event once by its id (`nag_log`, `ON CONFLICT(id) DO NOTHING`): ids must never repeat, not
@@ -26,7 +28,7 @@ internal class StoreTest : EngineCase() {
     @Test fun eventIdsNeverRepeatWhenTheStateFileBreaks() {
         Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
         Engine.fire(app, at("2026-11-18T08:00"))
-        Engine.ignore(app, group().nag, "notNow", at("2026-11-18T08:00") + 5_000)
+        Engine.notNowKeys(app, listOf(pillA.getString("key")), at("2026-11-18T08:00") + 5_000)
         val before = ids()
         assertEquals(2, before.size)
         assertTrue("one after the other", before[1] == before[0] + 1)
@@ -53,21 +55,22 @@ internal class StoreTest : EngineCase() {
     }
 
     /**
-     * The state lost with its file, the ladder goes on from the plan kept: the doses still more than two hours ahead
-     * nag on time (none could have been confirmed yet, which opens two hours before), while the ones before, which
-     * she may have confirmed, wait for the app's next plan rather than nag for a dose already taken.
+     * The state lost with its file, the threads go on from the plan kept: the doses still more than two hours ahead are
+     * reminded on time (none could have been confirmed yet, which opens two hours before), while the ones before, which
+     * she may have confirmed, wait for the app's next plan rather than remind her of a dose already taken.
      */
-    @Test fun aBrokenStateKeepsNaggingOnlyTheDosesStillAhead() {
+    @Test fun aBrokenStateKeepsRemindingOnlyTheDosesStillAhead() {
         Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
         Engine.resolve(app, listOf(pillA.getString("key")), "taken", null, at("2026-11-18T07:30"))
         breakState()
         clock = at("2026-11-18T07:40")
         NagSystemReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
-        assertEquals("pill B's time, not pill A's again", at("2026-11-18T12:00"), alarms.nextAlarmClock.triggerTime)
+        assertEquals("pill B's time, not pill A's again", at("2026-11-18T12:00"), step())
         Engine.fire(app, at("2026-11-18T08:00"))
-        assertEquals(null, nag())
+        assertTrue(out.posts.isEmpty())
         Engine.fire(app, at("2026-11-18T12:00"))
-        assertEquals("ringing", Store.state(app).groups.getValue("2026-11-18T12:00").state)
+        assertEquals(Step.NOTIFY, Store.state(app).groups.getValue("2026-11-18T12:00").step)
+        assertEquals(listOf("Pill B"), out.posts.single().names)
         // The app's next plan takes over: a dose it names again opens.
         Engine.schedule(app, NagFixtures.plan(pillB, made = at("2026-11-18T12:01")), at("2026-11-18T12:01"))
         assertEquals(listOf("b@2026-11-18T12:00"), Store.state(app).doses.keys.toList())

@@ -16,13 +16,12 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
-import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.os.Vibrator
 import android.provider.Settings
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
@@ -38,17 +37,16 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
          * the cap, for a route that never says.
          */
         const val CELEBRATE_MAX_MS = 5_000L
-        /** The latest a ring test may be asked for, and how long its ring lasts unanswered. */
-        const val PREVIEW_AFTER_MAX_MS = 60_000L
-        const val PREVIEW_RING_MS = 20_000L
         /** `Settings.ACTION_ZEN_MODE_SETTINGS`, which the SDK hides: Do Not Disturb's page (Modes from Android 15). */
         const val ZEN_MODE_SETTINGS = "android.settings.ZEN_MODE_SETTINGS"
+        /** Android's own volume slider for a stream, shown without changing it (`ADJUST_SAME`, `FLAG_SHOW_UI`); the tests
+         * replace it, since Robolectric records no flags. */
+        @Volatile internal var volumePanel: (AudioManager, Int) -> Unit = { a, stream -> a.adjustStreamVolume(stream, AudioManager.ADJUST_SAME, AudioManager.FLAG_SHOW_UI) }
         @Volatile private var live: WeakReference<NagModule>? = null
         internal fun changed() { live?.get()?.let { it.context.changed("nag.nagState"); it.context.changed("nag.nagStatus") } }
     }
 
     private val app: Context get() = context.application
-    private var preview: MediaPlayer? = null
     private val main = Handler(Looper.getMainLooper())
     /**
      * The engine handed the screen back to the keyguard ([lockAgain]) and the activity hasn't been resumed since. Android
@@ -58,15 +56,6 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private var handedBack = false
     /** The keyguard back over the app, unless she unlocked meanwhile. */
     private val lockAgain = Runnable { if (keyguardLocked()) { handedBack = true; context.showOverLock(false) } }
-    /** The ring test's ring, due ([previewFire]) and then ringing until [previewEnd]. */
-    private var previewRung = 0
-    private var previewOpen: Intent? = null
-    private var previewTitle = ""
-    private var previewBody = ""
-    private var previewWake: PowerManager.WakeLock? = null
-    private var previewRinging = false
-    private val previewFire = Runnable { previewRing() }
-    private val previewEnd = Runnable { previewStop(timedOut = true) }
 
     init {
         if (!context.agent) {
@@ -83,7 +72,7 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             "nagState" -> reply(state())
             "scheduleNags" -> {
                 val plan = args.optJSONObject("plan") ?: return reply(JSONObject().put("error", "TypeError"))
-                // A plan that cannot be read is refused; the engine keeps nagging from the last one.
+                // A plan that cannot be read is refused; the engine keeps reminding from the last one.
                 reply(if (Engine.schedule(app, plan)) JSONObject() else JSONObject().put("error", "TypeError"))
             }
             "resolveNags" -> {
@@ -96,8 +85,9 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 if (!context.agent) celebrate(keys)
                 reply(JSONObject())
             }
-            // The nag screen's "Not now": keys the engine does not know, or a nag already ignored, count nothing.
-            "ignoreNags" -> { Engine.ignoreKeys(app, strings(args.optJSONArray("keys"))); reply(JSONObject()) }
+            // The nag screen's "Agora não": the next step moves to one gap after the tap, never sooner; keys the engine
+            // does not know count nothing.
+            "ignoreNags" -> { Engine.notNowKeys(app, strings(args.optJSONArray("keys"))); reply(JSONObject()) }
             "ackNagEvents" -> { args.optString("through").toLongOrNull()?.let { Engine.ack(app, it) }; reply(JSONObject()) }
             "nagScreen" -> {
                 main.removeCallbacks(lockAgain)
@@ -111,9 +101,9 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 }
                 reply(JSONObject())
             }
-            // The route shown over the lock screen is done (the celebration ended, "Agora não", the ring test answered):
-            // the keyguard comes back in `after` ms, at most the celebration's cap. Whether it will: the route then keeps
-            // its last frame, so what lies under it (Today) never shows over the lock screen.
+            // The route shown over the lock screen is done (the celebration ended, "Agora não", the test's "Parar
+            // teste"): the keyguard comes back in `after` ms, at most the celebration's cap. Whether it will: the route
+            // then keeps its last frame, so what lies under it (Today) never shows over the lock screen.
             "leaveLockScreen" -> {
                 val locking = !context.agent && keyguardLocked() && (context.resumed || handedBack)
                 if (locking && context.resumed) {
@@ -122,14 +112,25 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 }
                 reply(JSONObject().put("locking", locking))
             }
-            "requestNagAccess" -> request(args.optString("what")) { reply(status()) }
-            "previewNag" -> {
+            "requestNagAccess" -> request(args.optString("what"), args) { reply(status()) }
+            "rehearse" -> {
                 if (context.agent) return reply(JSONObject())
-                preview(args.optInt("rung"), args.optDouble("after", 0.0).toLong(), args.optString("title"),
-                    args.optString("body"), args.optString("route"))
+                if (args.optString("step") !in setOf("notify", "bubble", "full", "alarm")) return reply(JSONObject().put("error", "TypeError"))
+                Rehearsal.start(app, args)
                 reply(JSONObject())
             }
-            "stopNagPreview" -> { previewStop(timedOut = false); reply(JSONObject()) }
+            "stopRehearsal" -> { Rehearsal.stop(app, "app"); reply(JSONObject()) }
+            "previewSound" -> {
+                // In front only: Android allows an app's sound while one of its activities shows.
+                if (!context.agent && context.resumed) Preview.play(app, args.optString("sound"), args.optString("usage"), args.optDouble("volume", 1.0))
+                reply(JSONObject())
+            }
+            "pickNagSound" -> pick(args.optString("current"), args.optString("title"), reply)
+            "renewNagChannel" -> {
+                val sound = args.optString("sound")
+                if (sound.isNotEmpty()) Remind.renew(app, sound, Store.plan(app)?.texts?.channels?.get(sound))
+                reply(status())
+            }
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
     }
@@ -137,11 +138,15 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     /** The bubble hides while the app's activity is resumed and comes back when it pauses. Back in front, everything is
      * set again: notifications turned back on in Settings meanwhile bring back the doses they silenced. */
     override fun resumed() = front(true)
-    override fun paused() = front(false)
+    override fun paused() { Preview.stop(); front(false) }
 
     private fun front(shown: Boolean) {
         if (shown) handedBack = false
         Engine.appInFront = shown
+        // In front the bubble hides at once, however the app came there; the engine's refresh brings it back after, and
+        // the experience test's bubble shows once she leaves.
+        if (shown && Bubble.shown) Bubble.hide()
+        if (!shown && !context.agent) Rehearsal.away(app)
         if (!context.agent) Engine.restore(app, front = shown)
     }
 
@@ -150,18 +155,18 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun destroy(done: () -> Unit) {
         main.removeCallbacks(lockAgain)
-        previewStop(timedOut = false)
+        Preview.release()
         // A module that goes after the next one was made leaves the activity's state to that one.
         if (live?.get() === this) { live = null; Engine.appInFront = false; Engine.screen = emptySet() }
         done()
     }
 
     /**
-     * Decision 5: [keys] confirmed (or promised) on the route the full-screen nag showed over the lock screen, and
-     * nothing of their nag left to do: the route celebrates, says when it ends (`leaveLockScreen`), and the keyguard
-     * covers the app again then, at the latest [CELEBRATE_MAX_MS] after the confirmation. A new nag shown meanwhile
-     * (`nagScreen`) keeps it. A promise is one dose's: while another dose of the nag is open and not promised, the
-     * route goes on to it and the keyguard stays away ([Engine.settled]).
+     * Decision 5: [keys] confirmed (or promised) on the route the full screen showed over the lock screen, and nothing
+     * of their reminder left to do: the route celebrates, says when it ends (`leaveLockScreen`), and the keyguard covers
+     * the app again then, at the latest [CELEBRATE_MAX_MS] after the confirmation. A new reminder shown meanwhile
+     * (`nagScreen`) keeps it. A promise is one dose's: while another dose is open and not promised, the route goes on to
+     * it and the keyguard stays away ([Engine.settled]).
      */
     private fun celebrate(keys: List<String>) {
         if (!overLock() || !Engine.settled(app, keys)) return
@@ -180,21 +185,21 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
     private fun state(): JSONObject {
         val plan = Store.plan(app)
         val st = Store.state(app)
-        val doses = if (plan == null) JSONArray() else JSONArray(Rules.doses(plan, st))
+        val doses = if (plan == null) JSONArray() else JSONArray(Rules.doses(plan, st, Chain.exact(app)))
         return JSONObject().put("doses", doses).put("events", JSONArray(Store.events(app).map { it.json() }))
             .put("front", plan?.let { front(it, st) } ?: JSONObject.NULL)
     }
 
     /**
-     * Decision 7: the nag that rang with the app in front and the nag screen has not shown yet. The app opens `route`
-     * (`?via=fsi`: it rings there until her first touch) at once, or shows a banner while she is in a form and opens it
-     * when she leaves; showing one of its doses (`nagScreen`) clears it. `nag` is new for every loud nag, so the app acts
-     * once per nag; `keys` and `names` are the lead group's open doses under no promise (the ones it rang for), `at`
-     * when it rang.
+     * Decisions 7 and 17: the reminder that fired with the app in front and the nag screen has not shown yet. For a
+     * notification step (`step`: the dose time's, De novo, a repeat, a deadline) the app shows the banner and plays her
+     * sound itself (`previewSound`), or only the sound on Hoje; for the full screen and the alarm it opens `route` at
+     * once (`?via=fsi`: the alarm rings there until her first touch), or a banner while she is in a form. Showing one of
+     * its doses (`nagScreen`) clears it. `nag` is new for every step that fires, so the app acts once per step; `keys`
+     * and `names` are the lead dose time's open doses under no promise, `at` when it fired.
      *
-     * Item 20: a nag that came due in front with notifications off rang nothing ([State.silent]). Its route says
-     * `?via=silent`: the nag screen tells the engine it shows the dose at its first show, as when she opens it herself,
-     * which ends the front (with `fsi` it would wait for a touch that silences a ring). `at` is when it came due.
+     * Item 20: a step that came due in front with notifications off showed nothing ([State.silent]). Its route says
+     * `?via=silent`: the nag screen tells the engine it shows the dose at its first show. `at` is when it came due.
      */
     private fun front(plan: Plan, st: State): JSONObject? = Rules.front(plan, st)?.let { g ->
         val doses = Rules.nagged(plan, st, g)
@@ -202,9 +207,10 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         JSONObject().put("nag", st.front).put("group", g.group).put("route", Shade.route(plan, g.group, if (silent) "silent" else "fsi"))
             .put("keys", JSONArray(doses.map { it.key })).put("names", JSONArray(doses.map { it.name }.distinct()))
             .put("at", if (silent) st.silentAt else g.lastFiredAt ?: 0L)
+            .put("step", Rules.word(Rules.frontStep(plan, st, g) ?: Step.NOTIFY))
     }
 
-    // MARK: the status (the alarm-health panel)
+    // MARK: the status (Como eu te lembro)
 
     private fun notifications(): String {
         val enabled = app.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
@@ -213,6 +219,12 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
         return if (shared != "prompt" && !enabled) "denied" else shared
     }
 
+    /**
+     * What the phone allows (item 13): each access, the battery's restriction (which switches the reminders to the
+     * alarm clock, item 6), the ringer mode (silent mutes a notification's vibration too), each stream's level over its
+     * maximum, whether Do Not Disturb lets alarms through and reminders (only a hint under Android 15's modes), and each
+     * reminder channel read back.
+     */
     private fun status(): JSONObject {
         val nm = app.getSystemService(NotificationManager::class.java)
         val power = app.getSystemService(PowerManager::class.java)
@@ -222,35 +234,56 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
             nm.canPostPromotedNotifications() -> "granted"
             else -> "denied"
         }
-        val dnd = when (nm.currentInterruptionFilter) {
+        val filter = nm.currentInterruptionFilter
+        val policy = runCatching { nm.notificationPolicy }.getOrNull()
+        fun lets(category: Int): Boolean = when (filter) {
             NotificationManager.INTERRUPTION_FILTER_NONE -> false
-            NotificationManager.INTERRUPTION_FILTER_PRIORITY ->
-                runCatching { nm.notificationPolicy.priorityCategories and NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS != 0 }.getOrDefault(true)
+            NotificationManager.INTERRUPTION_FILTER_ALARMS -> category == NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS
+            NotificationManager.INTERRUPTION_FILTER_PRIORITY -> policy?.let { it.priorityCategories and category != 0 } ?: true
             else -> true
         }
-        val max = audio.getStreamMaxVolume(AudioManager.STREAM_ALARM).coerceAtLeast(1)
+        fun level(stream: Int) = audio.getStreamVolume(stream).toDouble() / audio.getStreamMaxVolume(stream).coerceAtLeast(1)
+        val ringer = when (audio.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "silent"
+            AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+            else -> "normal"
+        }
         return JSONObject().put("available", true).put("notifications", notifications()).put("channelBlocked", Shade.blocked(app))
             .put("exactAlarms", Chain.exact(app))
             .put("fullScreen", FullScreen.allowed(app)).put("overlay", Settings.canDrawOverlays(app)).put("promoted", promoted)
             .put("batteryUnrestricted", power.isIgnoringBatteryOptimizations(app.packageName))
             .put("backgroundRestricted", app.getSystemService(ActivityManager::class.java).isBackgroundRestricted)
             .put("standbyBucket", app.getSystemService(UsageStatsManager::class.java).appStandbyBucket)
-            .put("alarmVolume", audio.getStreamVolume(AudioManager.STREAM_ALARM).toDouble() / max)
-            .put("dndAllowsAlarms", dnd).put("maker", Build.MANUFACTURER ?: "")
+            .put("alarmVolume", level(AudioManager.STREAM_ALARM)).put("notificationVolume", level(AudioManager.STREAM_NOTIFICATION))
+            .put("ringerMode", ringer)
+            .put("dndAllowsAlarms", lets(NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS))
+            .put("dndAllowsReminders", lets(NotificationManager.Policy.PRIORITY_CATEGORY_REMINDERS))
+            .put("channels", Remind.status(app))
+            .put("maker", Build.MANUFACTURER ?: "")
     }
 
     // MARK: the request: the one screen that grants [what], then the status
 
-    private fun request(what: String, done: () -> Unit) {
-        // Do Not Disturb's own page: on a Pixel with Android 15 or later it is Modes, which lists it (the sound page
-        // and Notifications no longer have it there). The action is the platform's but hidden from the SDK. Where no
-        // app opens it, Android's sound page.
+    private fun request(what: String, args: JSONObject, done: () -> Unit) {
+        // Do Not Disturb's own page: on a Pixel with Android 15 or later it is Modes, which lists it (the sound page and
+        // Notifications no longer have it there). The action is the platform's but hidden from the SDK. Where no app
+        // opens it, Android's sound page.
         if (what == "dnd") {
-            context.startActivityForResult(Intent(ZEN_MODE_SETTINGS), { why -> if (why == "NotFoundError") request("sound", done) else done() }) { _, _ ->
+            context.startActivityForResult(Intent(ZEN_MODE_SETTINGS), { why ->
+                if (why == "NotFoundError") context.startActivityForResult(Intent(Settings.ACTION_SOUND_SETTINGS)) { _, _ -> done() } else done()
+            }) { _, _ ->
                 Engine.restore(app)
                 done()
             }
             return
+        }
+        // "Ajustar no Android": Android's own volume slider for the stream, shown without changing it; Pinkoo never sets
+        // the system volume. On One UI the alarm's row may not show (its volume lives in Relógio).
+        if (what == "volume") {
+            val stream = if (args.optString("stream") == "alarm") AudioManager.STREAM_ALARM else AudioManager.STREAM_NOTIFICATION
+            runCatching { volumePanel(app.getSystemService(AudioManager::class.java), stream) }
+                .onFailure { android.util.Log.w("pinkoo.nag", "volume: $it") }
+            return done()
         }
         val pkg = Uri.parse("package:${app.packageName}")
         val intent = when (what) {
@@ -258,75 +291,53 @@ class NagModule(context: ExtensionContext) : ExactExtension(context) {
                 if (Build.VERSION.SDK_INT >= 33 && notifications() == "prompt") return context.askPermission(Manifest.permission.POST_NOTIFICATIONS, done)
                 Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
             }
+            // A reminder channel's own page (one she blocked or changed): Android keeps her settings, so Pinkoo never
+            // remakes it under a new id behind her back.
+            "channel" -> Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, Remind.id(app, args.optString("sound").ifEmpty { Sounds.DEFAULT }))
             "exactAlarms" -> if (Build.VERSION.SDK_INT >= 31) Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkg) else null
             "fullScreen" -> if (Build.VERSION.SDK_INT >= 34) Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkg) else null
             "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg)
             "promoted" -> if (LiveUpdate.platform()) Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName) else null
+            // Pinkoo's own battery page ("Arrumar" on the restricted-battery row): Android's list where it has none.
             "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            // The ring test's "Didn't hear it": Android's sound page (the alarm volume, Do Not Disturb, the sounds).
-            "sound" -> Intent(Settings.ACTION_SOUND_SETTINGS)
             // One UI's "Never sleeping apps" list (Samsung, "App management"); elsewhere the app's own settings.
             "sleeping" -> Intent("com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY").putExtra("activity_type", 2)
                 .takeIf { it.resolveActivity(app.packageManager) != null } ?: Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
             else -> null
         } ?: return done()
         context.startActivityForResult(intent) { _, _ ->
-            // An access granted re-arms what it allows (exact alarms, the full-screen nag, the bubble).
+            // An access granted re-arms what it allows (exact alarms, the full screen, the bubble).
             Engine.restore(app)
             done()
         }
     }
 
-    // MARK: the ring test: the real full-screen nag, never a dose
+    // MARK: the phone's sounds
 
     /**
-     * "Testar o toque": in [after] ms (at most [PREVIEW_AFTER_MAX_MS]) the rung's ring and vibration, as a nag at
-     * [rung] rings them, and the full-screen nag as a real nag shows it: with the app not in front (the screen locked,
-     * off, or another app open) a loud notification ([title], [body]) whose full-screen intent opens [route] over the
-     * keyguard and turns the screen on; with the app in front, only the ring. It rings until `stopNagPreview` or for
-     * [PREVIEW_RING_MS]. Nothing is recorded and nothing climbs: no dose, no event, no alarm of the chain.
-     *
-     * The wait runs in the process, under a wake lock (the screen may go off meanwhile): a few seconds after her tap,
-     * neither Doze nor the freezer has come yet.
+     * "Um som do celular" (item 8): Android's sound picker. Android swaps a sound the app can't read for its default,
+     * silently and in the posted notification only, and a sound she added herself needs a media permission the grant
+     * table lacks, so the picked sound is opened from Pinkoo's own process first and refused when it can't be
+     * (`unreadable`). The answer is the canonical address (MediaStore ids can change after an update), which then
+     * names that dose's channel, and the sound's title.
      */
-    private fun preview(rung: Int, after: Long, title: String, body: String, route: String) {
-        previewStop(timedOut = false)
-        previewRung = rung
-        previewTitle = title
-        previewBody = body
-        previewOpen = Shade.openingAt(app, if (route.startsWith("/")) route else "/", overLock = true)
-        val wait = after.coerceIn(0, PREVIEW_AFTER_MAX_MS)
-        previewWake = app.getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pinkoo:preview")
-            ?.apply { acquire(wait + 2_000) }
-        main.postDelayed(previewFire, wait)
+    private fun pick(current: String, title: String, reply: (JSONObject) -> Unit) {
+        fun answer(status: String, sound: String = "", name: String = "") = reply(JSONObject().put("status", status).put("sound", sound).put("title", name))
+        if (context.agent) return answer("cancelled")
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+            .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, false)
+        if (title.isNotEmpty()) intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, title)
+        if (Sounds.phone(current)) intent.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(current))
+        context.startActivityForResult(intent, { answer("cancelled") }) { _, data ->
+            @Suppress("DEPRECATION")
+            val uri: Uri = data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI) ?: return@startActivityForResult answer("cancelled")
+            if (!Sounds.readable(app, uri)) return@startActivityForResult answer("unreadable")
+            val canonical = runCatching { app.contentResolver.canonicalize(uri) }.getOrNull() ?: uri
+            val name = runCatching { RingtoneManager.getRingtone(app, uri)?.getTitle(app) }.getOrNull() ?: ""
+            answer("picked", canonical.toString(), name)
+        }
     }
-
-    private fun previewRing() {
-        previewWake?.let { if (it.isHeld) it.release() }
-        previewWake = null
-        val plan = Store.plan(app)
-        preview = NagService.player(app, plan?.volume(previewRung) ?: 1.0)
-        previewRinging = true
-        NagService.vibrate(app, previewRung)
-        // In front, the screen she is on already shows the ring: a notification over it would only cover it.
-        if (!context.resumed) runCatching { Shade.preview(app, plan, previewTitle, previewBody, previewOpen) }
-            .onFailure { android.util.Log.w("pinkoo.nag", "preview: $it") }
-        main.postDelayed(previewEnd, PREVIEW_RING_MS)
-    }
-
-    /** The ring test ended: answered (`stopNagPreview`), left, or rung out. Rung out over the lock screen, nobody
-     * answered there: the keyguard covers the app again. */
-    private fun previewStop(timedOut: Boolean) {
-        main.removeCallbacks(previewFire)
-        main.removeCallbacks(previewEnd)
-        previewWake?.let { if (it.isHeld) it.release() }
-        previewWake = null
-        preview?.runCatching { stop(); release() }
-        preview = null
-        if (previewRinging) app.getSystemService(Vibrator::class.java)?.cancel()
-        previewRinging = false
-        runCatching { Shade.cancel(app, Shade.PREVIEW) }
-        if (timedOut && overLock()) context.showOverLock(false)
-    }
-
 }

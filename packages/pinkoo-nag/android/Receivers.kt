@@ -1,6 +1,7 @@
-// What runs with no session: the alarm, the nag notification's "Not now" and dismissal, the promise notification's
-// dismissal (explicit broadcasts, so the fragment lists no actions for them), and the system's boot, clock, zone,
-// update and exact-alarm broadcasts. Both receivers are direct-boot aware and read only the device-protected store.
+// What runs with no session: the alarms, the reminder's "Agora não" and dismissal, the promise notification's dismissal
+// (explicit broadcasts, so the fragment lists no actions for them), and the system's boot, clock, zone, update and
+// exact-alarm broadcasts, and the surface's own (the alarm's and the test's "Parar", the test's waits). Both receivers
+// are direct-boot aware and read only the device-protected store.
 package pinkoo.nag
 
 import android.app.AlarmManager
@@ -12,6 +13,8 @@ import android.os.PowerManager
 class NagReceiver : BroadcastReceiver() {
     companion object {
         const val FIRE = "pinkoo.nag.FIRE"
+        /** [FIRE]'s extra: the request code that fired ([Chain.STEP], [Chain.ALARM], [Chain.BACKUP]). */
+        const val BY = "by"
         const val NOT_NOW = "pinkoo.nag.NOT_NOW"
         const val DISMISS = "pinkoo.nag.DISMISS"
         const val PROMISE_DISMISSED = "pinkoo.nag.PROMISE_DISMISSED"
@@ -27,12 +30,16 @@ class NagReceiver : BroadcastReceiver() {
                 lock.acquire(10_000)
                 NagService.release()
                 NagService.waking = lock
-                Engine.fire(c)
+                Engine.fire(c, by = intent.getIntExtra(BY, Chain.STEP))
                 if (!NagService.starting) NagService.release()
             }
-            NOT_NOW -> Engine.ignore(c, nag, "notNow")
+            NOT_NOW -> Engine.notNow(c, nag)
             DISMISS -> Engine.dismissed(c, nag)
             PROMISE_DISMISSED -> Engine.promiseDismissed(c, intent.getLongExtra("at", 0))
+            // The surface's own: the alarm's and the test's "Parar" and delete intent; the test's waits.
+            AndroidOut.STOP -> AndroidOut.stopped(c, intent)
+            Rehearsal.ACTION -> Rehearsal.fire(c, intent)
+            Rehearsal.STOP -> Rehearsal.stopped(c, intent)
         }
     }
 }

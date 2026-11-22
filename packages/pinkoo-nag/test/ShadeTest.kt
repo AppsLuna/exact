@@ -1,18 +1,16 @@
 package pinkoo.nag
 
-import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.content.ComponentName
-import android.content.Context
-import android.content.ContextWrapper
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.media.AudioAttributes
 import android.provider.Settings
-import org.json.JSONArray
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -24,157 +22,340 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
-import org.robolectric.shadows.ShadowAlarmManager
 
-/** The nag notification: a new one for every loud nag, posted only when it changed, sounding itself when no service
- * can ring, and showing the rung and line the nag screen shows. */
+/** The reminder notification and her channels (items 4, 5 and 17's posting side), fed the core's posts. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-internal class ShadeTest : EngineCase() {
+internal class ShadeTest : SurfaceCase() {
     private fun only(n: Notification) = n.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0
+    /** A post that must not sound: in a group that alerts only for its summary, which never comes. */
+    private fun quiet(n: Notification) = n.group != null && n.groupAlertBehavior == Notification.GROUP_ALERT_SUMMARY
+    private fun actions(n: Notification) = n.actions?.map { it.title.toString() } ?: emptyList()
+    private fun intentOf(p: android.app.PendingIntent) = shadowOf(p).savedIntent
 
     /**
-     * Android launches a full-screen intent only for a notification newly posted, never for an update of one that
-     * shows (measured on Android 16: a dose's third nag showed no full-screen nag). Each loud nag is a new
-     * notification: its id alternates between two, the one before going, so there is still only one.
+     * Item 4: each step that sounds is a new post on her reminder channel (Android plays a channel's sound only for a
+     * notification posted anew), the id alternating and the other one cancelled. A reminder: the reminder category, not
+     * ongoing, "Tomei", "Tomo daqui a…" and "Agora não" on every step, its swipe and "Agora não" broadcasts, and a public
+     * version without the medication's name.
      */
-    @Test fun everyLoudNagIsANewNotificationSoItsFullScreenNagLaunches() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
+    @Test fun everySoundingStepIsANewPostOnHerReminderChannel() {
+        val o = out()
         val ids = ArrayList<Int>()
-        var t = at("2026-11-18T08:00")
-        repeat(4) {
-            clock = t
-            Engine.fire(app, t)
-            val s = serve()!!
-            val loud = nag()!!
-            assertEquals(shadowOf(s).lastForegroundNotificationId, loud.id)
-            assertEquals(Shade.CH_NAG, loud.notification.channelId)
-            assertEquals(Notification.CATEGORY_ALARM, loud.notification.category)
-            assertEquals(FullScreen.allowed(app), loud.notification.fullScreenIntent != null)
-            ids += loud.id
-            // Rung out: the same notification goes silent, as an update.
-            clock = t + 60_000
-            Engine.fire(app, t + 60_000)
-            assertEquals(loud.id, nag()!!.id)
-            assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
-            t = group().nextAt!!
+        for ((nag, step) in listOf(1 to Step.NOTIFY, 2 to Step.AGAIN, 3 to Step.REPEAT, 4 to Step.REPEAT)) {
+            o.post(post(nag, step))
+            val sbn = nag()!!
+            val n = sbn.notification
+            ids += sbn.id
+            assertEquals("$step", "pinkoo.remind.sininho", n.channelId)
+            assertEquals(Notification.CATEGORY_REMINDER, n.category)
+            assertEquals("a swipe dismisses it anywhere", 0, n.flags and Notification.FLAG_ONGOING_EVENT)
+            assertFalse("it sounds", quiet(n))
+            assertNull(n.fullScreenIntent)
+            assertEquals(listOf("Taken", "In a bit…", "Not now"), actions(n))
+            assertEquals(NagReceiver.NOT_NOW, intentOf(n.actions[2].actionIntent).action)
+            assertEquals(nag, intentOf(n.actions[2].actionIntent).getIntExtra("nag", 0))
+            assertEquals(NagReceiver.DISMISS, intentOf(n.deleteIntent).action)
+            assertEquals(Notification.VISIBILITY_PRIVATE, n.visibility)
+            assertEquals("Pinkoo", n.publicVersion.extras.getString(Notification.EXTRA_TITLE))
+            assertEquals("Time for Pill A", n.extras.getString(Notification.EXTRA_TITLE))
+            assertEquals("a0", n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+            assertEquals("It's 08:00.", n.extras.getCharSequence(Notification.EXTRA_SUB_TEXT).toString())
         }
         assertEquals(listOf(Shade.NAG, Shade.NAG_ALT, Shade.NAG, Shade.NAG_ALT), ids)
     }
 
-    /** Without the service too (the nag posted by the engine itself), a new loud nag is a new notification. */
-    @Test fun aLoudNagTheEnginePostsIsNewToo() {
-        Engine.schedule(refused, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        Engine.fire(refused, at("2026-11-18T08:00"))
-        val first = nag()!!.id
-        Engine.fire(refused, at("2026-11-18T08:01"))
-        Engine.fire(refused, at("2026-11-18T08:21"))
-        assertTrue(nag()!!.id != first)
-        assertEquals(Notification.CATEGORY_ALARM, nag()!!.notification.category)
+    /** The core calls [Out.post] again for a nag it already posted (a refresh, a restore): nothing sounds again. */
+    @Test fun aPostAlreadyMadeIsOnlyRefreshed() {
+        val o = out()
+        o.post(post(1))
+        val first = shadowOf(nm).getNotification(Shade.NAG)
+        o.post(post(1))
+        assertSame(first, shadowOf(nm).getNotification(Shade.NAG))
+        // Across a process death too: the notification itself says which nag it shows.
+        Shade.forget()
+        o.post(post(1))
+        assertSame(first, shadowOf(nm).getNotification(Shade.NAG))
     }
 
     /**
-     * A pause, a resume, a plan sent again unchanged, a time change: nothing the nag shows changed, so nothing is
-     * posted (an update of the loud nag popped its heads-up again). What changes is an update that alerts nothing.
+     * Item 4: a silent refresh stays in place with `setOnlyAlertOnce`, on her reminder channel, posted only when what it
+     * shows changed. With nothing showing at its id (a process death, Android cleared it), it is posted silently.
      */
-    @Test fun aRefreshThatChangesNothingPostsNothingAndAnUpdateAlertsNothing() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        clock = at("2026-11-18T08:00")
-        Engine.fire(app, clock)
-        serve()
-        val id = nag()!!.id
-        val first = shadowOf(nm).getNotification(id)
+    @Test fun aRefreshIsSilentInPlaceAndOnlyWhenItChanged() {
+        val o = out()
+        o.post(post(1))
+        val first = shadowOf(nm).getNotification(Shade.NAG)
         assertTrue("a later post of the same never alerts again", only(first))
-        Engine.restore(app, clock + 5_000, front = true)
-        Engine.restore(app, clock + 6_000, front = false)
-        Engine.schedule(app, NagFixtures.plan(pillA, made = 5), clock + 7_000)
-        NagSystemReceiver().onReceive(app, Intent(Intent.ACTION_TIME_CHANGED))
-        assertSame(first, shadowOf(nm).getNotification(id))
-        // A second medication joins the 08:00 dose: the notification names both, updated in place, silently.
-        val pillB = NagFixtures.dose("b@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T20:00", "Pill B")
-        Engine.schedule(app, NagFixtures.plan(pillA, pillB, made = 9), clock + 8_000)
-        val second = shadowOf(nm).getNotification(id)
+        o.refresh(post(1, sounding = false))
+        assertSame("nothing changed: nothing posted", first, shadowOf(nm).getNotification(Shade.NAG))
+        o.refresh(post(1, sounding = false, names = listOf("Pill A", "Pill B")))
+        val second = shadowOf(nm).getNotification(Shade.NAG)
         assertNotSame(first, second)
         assertEquals("Time for Pill A, Pill B", second.extras.getString(Notification.EXTRA_TITLE))
         assertTrue(only(second))
-        // Waiting, it is posted once too.
-        Engine.ignore(app, group().nag, "notNow", clock + 9_000)
-        val waiting = shadowOf(nm).getNotification(id)
-        assertEquals(Shade.CH_WAITING, waiting.channelId)
-        Engine.restore(app, clock + 10_000, front = true)
-        assertSame(waiting, shadowOf(nm).getNotification(id))
+        assertEquals("pinkoo.remind.sininho", second.channelId)
+        nm.cancelAll()
+        o.refresh(post(1, sounding = false))
+        assertTrue("posted anew, silently", quiet(nag()!!.notification))
     }
 
-    /** A context whose foreground service start Android refuses, as it does from the background to an app without
-     * exact-alarm access. */
-    private val refused: Context by lazy {
-        object : ContextWrapper(app) {
-            override fun startForegroundService(service: Intent): ComponentName? = throw ForegroundServiceStartNotAllowedException("background")
-        }
-    }
-
-    /**
-     * Decision 5: without exact-alarm access the alarm is inexact and the service may not start, so nothing plays the
-     * ring (measured on Android 16: a silent heads-up). The loud nag then sounds itself on a channel that plays her
-     * alarm sound on the alarm stream, insistent until the ring ends; the ring's end makes it silent.
-     */
-    @Test fun aRingNoServiceCanPlaySoundsOnTheAlarmChannel() {
-        ShadowAlarmManager.setCanScheduleExactAlarms(false)
-        Engine.schedule(refused, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        val ch = nm.getNotificationChannel(Shade.CH_RING)
-        assertEquals(NotificationManager.IMPORTANCE_HIGH, ch.importance)
-        assertEquals(AudioAttributes.USAGE_ALARM, ch.audioAttributes.usage)
-        assertEquals(Settings.System.DEFAULT_ALARM_ALERT_URI, ch.sound)
-        assertTrue(ch.shouldVibrate())
-        assertEquals("Reminders with sound", ch.name.toString())
-        assertNull("the ring's own channel stays silent", nm.getNotificationChannel(Shade.CH_NAG).sound)
-        Engine.fire(refused, at("2026-11-18T08:00"))
-        assertNull(NagService.running)
-        val loud = nag()!!.notification
-        assertEquals(Shade.CH_RING, loud.channelId)
-        assertTrue(loud.flags and Notification.FLAG_INSISTENT != 0)
-        assertEquals(Notification.CATEGORY_ALARM, loud.category)
-        Engine.fire(refused, at("2026-11-18T08:01"))
-        assertEquals(1, group().ignores)
-        assertEquals(Shade.CH_WAITING, nag()!!.notification.channelId)
-        assertTrue(nag()!!.notification.flags and Notification.FLAG_INSISTENT == 0)
-    }
-
-    /** With the service ringing, the loud nag stays on the silent nag channel: the service plays the ring. */
-    @Test fun aRingTheServicePlaysIsOnTheSilentChannel() {
-        Engine.schedule(app, NagFixtures.plan(pillA), at("2026-11-18T07:00"))
-        Engine.fire(app, at("2026-11-18T08:00"))
-        serve()
-        assertEquals(Shade.CH_NAG, nag()!!.notification.channelId)
-        assertTrue(nag()!!.notification.flags and Notification.FLAG_INSISTENT == 0)
+    /** A step folded into the alarm, or posted while nothing may sound, is a new post that doesn't alert. In front
+     * (decision 17) it goes on the waiting channel: no heads-up, no full-screen intent. */
+    @Test fun aPostThatMustNotSoundIsSilentAndInFrontItIsOnTheWaitingChannel() {
+        val o = out()
+        o.post(post(1, sounding = false))
+        assertTrue(quiet(nag()!!.notification))
+        o.post(post(2, sounding = false, front = true, fullScreen = true))
+        val n = nag()!!.notification
+        assertEquals(Shade.CH_WAITING, n.channelId)
+        assertNull(n.fullScreenIntent)
     }
 
     /**
-     * The notification shows what the nag screen shows (`src/app/plan.ts` nagRung, nagLineIndex): the rung is the
-     * group's ignores up to the top, 4, with that rung's mascot, and the line `lines[rung][(seed + ignores) mod count]`.
+     * Item 17: Tela cheia posts with its full-screen intent on the silent channel only while the phone is locked or dark
+     * and Do Not Disturb is off. With the phone in use, Do Not Disturb on, or no access, it is her reminder posted anew,
+     * sounding, as a heads-up.
      */
-    @Test fun theNotificationShowsTheRungAndLineTheNagScreenShows() {
-        val seeded = NagFixtures.dose("a@2026-11-18T08:00", "2026-11-18T08:00", "2026-11-18T23:00", "Pill A", seed = 10)
-        val fills = listOf("#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF")
-        val o = NagFixtures.plan(seeded).put("mascots", JSONArray(fills.map { NagFixtures.mascot(it) }))
-        Engine.schedule(app, o, at("2026-11-18T07:00"))
+    @Config(sdk = [33]) // full-screen access allowed by default on Android 12 and 13
+    @Test fun theFullScreenOpensOnlyOnALockedOrDarkPhoneWithDoNotDisturbOff() {
+        val o = out()
+        phone(locked = true, on = true)
+        o.post(post(1, Step.FULL, fullScreen = true))
+        var n = nag()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertNotNull(n.fullScreenIntent)
+        assertEquals(Notification.CATEGORY_REMINDER, n.category)
+        // Dark and unlocked: the same.
+        phone(locked = false, on = false)
+        o.post(post(2, Step.FULL, fullScreen = true))
+        assertNotNull(nag()!!.notification.fullScreenIntent)
+        // In use: her reminder, sounding.
+        phone(locked = false, on = true)
+        o.post(post(3, Step.FULL, fullScreen = true))
+        n = nag()!!.notification
+        assertEquals("pinkoo.remind.sininho", n.channelId)
+        assertNull(n.fullScreenIntent)
+        assertFalse(quiet(n))
+        // Do Not Disturb on, the phone locked: her reminder too.
+        phone(locked = true, on = false)
+        nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+        o.post(post(4, Step.FULL, fullScreen = true))
+        assertNull(nag()!!.notification.fullScreenIntent)
+        assertEquals("pinkoo.remind.sininho", nag()!!.notification.channelId)
+        nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+        // A refresh never re-attaches it.
+        o.post(post(5, Step.FULL, fullScreen = true))
+        assertNotNull(nag()!!.notification.fullScreenIntent)
+        o.refresh(post(5, Step.FULL, sounding = false, fullScreen = true, line = "a1"))
+        assertNull(nag()!!.notification.fullScreenIntent)
+        assertEquals("pinkoo.remind.sininho", nag()!!.notification.channelId)
+    }
+
+    /** Without full-screen access (Android 14 and later, a store install: Robolectric's default) the step is her
+     * reminder posted anew, sounding, even on a locked phone. */
+    @Test fun withoutTheAccessTheFullScreenIsHerReminder() {
+        assertFalse(FullScreen.allowed(app))
+        phone(locked = true, on = false)
+        out().post(post(1, Step.FULL, fullScreen = true))
+        val n = nag()!!.notification
+        assertNull(n.fullScreenIntent)
+        assertEquals("pinkoo.remind.sininho", n.channelId)
+        assertFalse(quiet(n))
+    }
+
+    /**
+     * Items 4 and 10: the alarm's notification is the alarm category, ongoing, public with neutral text (no medication's
+     * name) and "Parar", a broadcast that runs on the locked phone; its delete intent stops the ring too. When the ring
+     * has stopped, the refresh brings the reminder back on her channel, silently, in place.
+     */
+    @Test fun theAlarmsNotificationIsPublicWithStopAndTheReminderComesBackAfter() {
+        val o = out()
+        o.post(post(1, Step.ALARM, alarm = true))
+        val n = nag()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertEquals(Notification.VISIBILITY_PUBLIC, n.visibility)
+        assertTrue(n.flags and Notification.FLAG_ONGOING_EVENT != 0)
+        assertEquals("Medication alarm", n.extras.getString(Notification.EXTRA_TITLE))
+        assertFalse("no medication's name", n.extras.getCharSequence(Notification.EXTRA_TEXT).toString().contains("Pill"))
+        assertEquals(listOf("Stop"), actions(n))
+        val stop = intentOf(n.actions[0].actionIntent)
+        assertEquals(AndroidOut.STOP, stop.action)
+        assertEquals(1, stop.getIntExtra("nag", 0))
+        assertTrue(shadowOf(n.actions[0].actionIntent).isBroadcast)
+        assertEquals(AndroidOut.STOP, intentOf(n.deleteIntent).action)
+        assertEquals("swipe", intentOf(n.deleteIntent).getStringExtra("why"))
+        // Nothing rings (the ring stopped): the refresh is the reminder again, in place.
+        o.refresh(post(1, Step.ALARM, sounding = false, alarm = true))
+        val back = nag()!!
+        assertEquals(Shade.NAG, back.id)
+        assertEquals("pinkoo.remind.sininho", back.notification.channelId)
+        assertEquals("Time for Pill A", back.notification.extras.getString(Notification.EXTRA_TITLE))
+        assertTrue(only(back.notification))
+    }
+
+    /** "Já na hora": the dose time's step folded into the alarm is the alarm's notification, on the silent channel: the
+     * ring is the only sound. */
+    @Test fun aStepFoldedIntoTheAlarmIsTheAlarmsNotification() {
+        out().post(post(1, Step.NOTIFY, sounding = false, alarm = true, folded = true))
+        val n = nag()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+    }
+
+    /**
+     * Item 1: the notification's "Agora não" turns the post, silently and in place, into the confirmation for 5 s
+     * (`setTimeoutAfter`), then it goes; its delete intent (the timeout sends it too) is the dismissal. A refresh in the
+     * meantime leaves it.
+     */
+    @Test fun notNowFromTheNotificationShowsTheConfirmationForFiveSeconds() {
+        val o = out()
+        o.post(post(3))
+        o.confirm(3, "Okay: again at 08:30.")
+        val n = nag()!!
+        assertEquals(Shade.nagId(3), n.id)
+        assertEquals("Okay: again at 08:30.", n.notification.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(Shade.CONFIRM_MS, n.notification.timeoutAfter)
+        assertTrue(only(n.notification))
+        assertEquals("pinkoo.remind.sininho", n.notification.channelId)
+        assertTrue(actions(n.notification).isEmpty())
+        assertEquals(NagReceiver.DISMISS, intentOf(n.notification.deleteIntent).action)
+        assertEquals(3, intentOf(n.notification.deleteIntent).getIntExtra("nag", 0))
+        o.refresh(post(3, sounding = false, line = "b0"))
+        assertEquals("Okay: again at 08:30.", nag()!!.notification.extras.getString(Notification.EXTRA_TITLE))
+    }
+
+    @Test fun clearTakesTheReminderAwayBothIds() {
+        val o = out()
+        o.post(post(1))
+        o.clear(1)
+        assertTrue(nags().isEmpty())
+        o.post(post(2))
+        o.clear(0)
+        assertTrue(nags().isEmpty())
+    }
+
+    /** The rung's face and line: the notification shows the mascot at the post's rung, and its line. */
+    @Test fun theNotificationShowsThePostsRungAndLine() {
+        val o = out()
         val reds = listOf(Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.MAGENTA)
-        var t = at("2026-11-18T08:00")
-        for (ignores in 0..5) {
-            clock = t
-            Engine.fire(app, t)
-            serve()
+        for (rung in 0..4) {
+            o.post(post(rung + 1, rung = rung, line = lines[rung][0]))
             val n = nag()!!.notification
-            val rung = minOf(4, ignores)
-            val lines = NagFixtures.lines[rung]
-            assertEquals("ignores $ignores", lines[((10 + ignores) % lines.size)], n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+            assertEquals(lines[rung][0], n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
             val picture = (n.getLargeIcon().loadDrawable(app) as BitmapDrawable).bitmap
-            assertEquals("ignores $ignores", reds[rung], picture.getPixel(picture.width / 2, picture.height / 2))
-            assertEquals(rung, Rules.doses(Store.plan(app)!!, Store.state(app)).single().getInt("rung"))
-            Engine.ignore(app, group().nag, "notNow", t + 1_000)
-            t = group().nextAt!!
+            assertEquals("rung $rung", reds[rung], picture.getPixel(picture.width / 2, picture.height / 2))
         }
+    }
+
+    /** A promise: its deadline counting down on the waiting channel, a public version without the medication's name,
+     * its dismissal answering nothing; once dismissed, not shown again for that deadline. */
+    @Test fun aPromiseCountsDownToItsDeadline() {
+        val p = plan()
+        val st = State()
+        val until = at("2026-11-18T08:30")
+        st.doses["a@2026-11-18T08:00"] = DoseState("a@2026-11-18T08:00", until = until)
+        Shade.channels(app, p)
+        Shade.promise(app, p, st)
+        val n = shown(Shade.PROMISE)!!.notification
+        assertEquals(Shade.CH_WAITING, n.channelId)
+        assertEquals("Pill A by 08:30", n.extras.getString(Notification.EXTRA_TITLE))
+        assertTrue(n.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
+        assertEquals(until, n.`when`)
+        assertEquals("Pinkoo", n.publicVersion.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(NagReceiver.PROMISE_DISMISSED, intentOf(n.deleteIntent).action)
+        val first = shadowOf(nm).getNotification(Shade.PROMISE)
+        Shade.promise(app, p, st)
+        assertSame("posted only when it changed", first, shadowOf(nm).getNotification(Shade.PROMISE))
+        st.promiseDismissed = until
+        Shade.promise(app, p, st)
+        assertNull(shown(Shade.PROMISE))
+    }
+
+    // MARK: channels (item 5)
+
+    /**
+     * A plan makes one reminder channel per sound it names: importance high, the notification usage with sonification,
+     * a soft vibration, its name from the plan's texts. "Só vibrar" has the vibration and no sound, "Sem som" neither.
+     * The engine's own channels are made too, `pinkoo.nag` renamed, and the old ring channel goes.
+     */
+    @Test fun aPlanMakesOneReminderChannelPerSound() {
+        nm.createNotificationChannel(NotificationChannel(Shade.CH_RING_GONE, "old", NotificationManager.IMPORTANCE_HIGH))
+        val p = plan(dose("a@2026-11-18T08:00", "2026-11-18T08:00"), dose("b@2026-11-18T09:00", "2026-11-18T09:00", sound = "vibrate"),
+            dose("c@2026-11-18T10:00", "2026-11-18T10:00", sound = "silent"))
+        Shade.channels(app, p)
+        val bell = nm.getNotificationChannel("pinkoo.remind.sininho")
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, bell.importance)
+        assertEquals(AudioAttributes.USAGE_NOTIFICATION, bell.audioAttributes.usage)
+        assertEquals(AudioAttributes.CONTENT_TYPE_SONIFICATION, bell.audioAttributes.contentType)
+        assertEquals(Settings.System.DEFAULT_NOTIFICATION_URI, bell.sound)
+        assertTrue(bell.shouldVibrate())
+        assertArrayEquals(Remind.SOFT, bell.vibrationPattern)
+        assertEquals("Reminder · Sininho", bell.name.toString())
+        assertNull("made only when a dose names it: the texts only name it", nm.getNotificationChannel("pinkoo.remind.kalimba"))
+        val buzz = nm.getNotificationChannel("pinkoo.remind.vibrate")
+        assertNull(buzz.sound)
+        assertTrue(buzz.shouldVibrate())
+        val none = nm.getNotificationChannel("pinkoo.remind.silent")
+        assertNull(none.sound)
+        assertFalse(none.shouldVibrate())
+        assertEquals("Full screen and alarm", nm.getNotificationChannel(Shade.CH_NAG).name.toString())
+        assertNull(nm.getNotificationChannel(Shade.CH_NAG).sound)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, nm.getNotificationChannel(Shade.CH_WAITING).importance)
+        assertNull("the old ring channel goes", nm.getNotificationChannel(Shade.CH_RING_GONE))
+    }
+
+    /** A phone sound's channel is named by a hash of its canonical address (MediaStore ids can change after an
+     * update), and plays that address. */
+    @Test fun aPhoneSoundsChannelIsAHashOfItsAddress() {
+        val address = "content://media/internal/audio/media/42?title=Chime&canonical=1"
+        val id = Remind.ensure(app, address, "Reminder · Chime")
+        assertTrue(id, Regex("pinkoo\\.remind\\.phone\\.[0-9a-f]{12}").matches(id))
+        assertEquals(address, nm.getNotificationChannel(id).sound.toString())
+        assertEquals(id, Remind.ensure(app, address, "Reminder · Chime"))
+    }
+
+    /** A channel no plan names is deleted at a later plan; one still named stays, renamed when the language changes. */
+    @Test fun aChannelNoPlanNamesGoesAndARenamedOneKeepsItsId() {
+        val texts = texts().put("channels", org.json.JSONArray())
+        Shade.channels(app, Plan.parse(planJson(dose("a@2026-11-18T08:00", "2026-11-18T08:00"), dose("b@2026-11-18T09:00", "2026-11-18T09:00", sound = "kalimba"), texts = texts)))
+        assertNotNull(nm.getNotificationChannel("pinkoo.remind.kalimba"))
+        val pt = texts().put("channels", org.json.JSONArray().put(org.json.JSONObject().put("sound", "sininho").put("name", "Lembrete · Sininho")))
+        Shade.channels(app, Plan.parse(planJson(dose("a@2026-11-18T08:00", "2026-11-18T08:00"), texts = pt)))
+        assertNull(nm.getNotificationChannel("pinkoo.remind.kalimba"))
+        assertEquals("Lembrete · Sininho", nm.getNotificationChannel("pinkoo.remind.sininho").name.toString())
+    }
+
+    /**
+     * A channel she blocked or changed in Android is never remade under a new id: making it again keeps her settings,
+     * and Como eu te lembro reads it back. "Voltar pro {som}" (`renewNagChannel`) makes a new version as Pinkoo sets it,
+     * the old one deleted; never for a blocked one.
+     */
+    @Test fun aChangedChannelIsKeptAndRenewedOnlyWhenSheAsks() {
+        Shade.channels(app, plan())
+        val id = "pinkoo.remind.sininho"
+        // She lowers it in Android.
+        nm.getNotificationChannel(id).let { it.importance = NotificationManager.IMPORTANCE_LOW; nm.createNotificationChannel(it) }
+        Shade.channels(app, plan())
+        assertEquals(NotificationManager.IMPORTANCE_LOW, nm.getNotificationChannel(id).importance)
+        val read = Remind.status(app).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.single { it.getString("sound") == "sininho" }
+        assertEquals(id, read.getString("id"))
+        assertTrue(read.getBoolean("changed"))
+        assertFalse(read.getBoolean("blocked"))
+        // "Voltar pro Sininho": a new version, high again; the old one goes; reminders post on it.
+        assertEquals("$id.v2", Remind.renew(app, "sininho", "Reminder · Sininho"))
+        assertNull(nm.getNotificationChannel(id))
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, nm.getNotificationChannel("$id.v2").importance)
+        out().post(post(1))
+        assertEquals("$id.v2", nag()!!.notification.channelId)
+        // Blocked: kept, never renewed.
+        nm.getNotificationChannel("$id.v2").let { it.importance = NotificationManager.IMPORTANCE_NONE; nm.createNotificationChannel(it) }
+        assertEquals("$id.v2", Remind.renew(app, "sininho", null))
+        val blocked = Remind.status(app).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.single { it.getString("sound") == "sininho" }
+        assertTrue(blocked.getBoolean("blocked"))
+        assertFalse(blocked.getBoolean("changed"))
     }
 }

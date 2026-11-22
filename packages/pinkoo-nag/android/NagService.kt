@@ -1,58 +1,155 @@
-// The engine's one foreground service. It rings while a nag rings (the alarm sound on the alarm stream at the rung's
-// share of the person's alarm volume, never changing it, and a vibration that lengthens with the rung) and ends that
-// ring at its ring's end as an ignore (`Rules.ringOut`; the alarm is set then too, and whichever comes first counts
-// it). It also keeps the process while a nuisance needs one, the bubble or opening at unlock. Its notification is the
-// nag notification, so there is never a second one.
+// The ring service: the engine's one foreground service, needed only while the alarm (or the experience test's alarm
+// sample) rings, while the bubble shows, or while "Abrir quando eu desbloquear" waits for her unlock. Its foreground
+// notification is its own, low and ongoing on the waiting channel ("Bolota está por aqui"), never the reminder, which
+// would turn ongoing and unswipeable on the lock screen and change its flags at `stopForeground`.
 //
-// One service with both types, rather than one per job: it starts at the alarm, under the exact alarm's exemption
-// from Android's background start limits, as `systemExempted` (an exact-alarm holder's; the ring) and `specialUse`
-// (the hold, which has no time limit and no prerequisite). A hold that began after the ring in a second service would
-// need a start from the background that Android 12 and later refuse.
+// The alarm loops the dose's sound (the default preset when hers is "Só vibrar" or "Sem som", or can't be read, as a
+// phone sound before the first unlock after a reboot) through a `MediaPlayer` with `USAGE_ALARM`, at the plan's alarm
+// volume through the decibel curve ([Sounds.gain]), for up to 60 s. Pinkoo never changes the system volume.
+//
+// The stop contract, shared by the alarm and the test ([AndroidOut.stopped]): "Parar" and the alarm notification's
+// delete intent (broadcasts), opening Pinkoo from it (the app's nag screen tells the core), the unlock
+// (`ACTION_USER_PRESENT`), the power key (`ACTION_SCREEN_OFF`, and `ACTION_SCREEN_ON` once the ring has played about a
+// second, so the post's own wake doesn't count), the route's touch and volume keys (the app), and each cap. The screen
+// receivers exist only while a sound plays, so a screen turned off before it starts stops nothing.
+//
+// One service with both types: it starts at the alarm, under the exact alarm's exemption from Android's background
+// start limits, as `systemExempted` (an exact-alarm holder's) and `specialUse` (the bubble and the unlock wait, which
+// have no time limit). The bubble's window is added before it starts: from target 35 an app with "Aparecer por cima"
+// may start a foreground service from the background only while one of its overlays shows.
 package pinkoo.nag
 
 import android.app.AlarmManager
-import android.app.Notification
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
-import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.Settings
+import kotlin.math.pow
 
 /**
- * What a ring plays, in order. Her alarm sound through the settings' default URI first: `MediaPlayer` plays it from the
- * ringtone cache in device-protected storage, so the ring sounds before the first unlock after a boot, when the sound's
- * own file (`content://media/…`) cannot be read; then that file. With her alarm sound set to None, her ringtone the
- * same way (decision 5), and the notification sound last.
+ * The sounds: the presets in `res/raw` (`pinkoo_<id>`, rendered by the app's script and shipped by Exact for channels
+ * made at runtime), "Só vibrar", "Sem som", and the phone's own sounds by their canonical address.
  */
 internal object Sounds {
-    fun ring(c: Context): List<Uri> {
-        fun set(type: Int) = runCatching { RingtoneManager.getActualDefaultRingtoneUri(c, type) }.getOrElse { Settings.System.DEFAULT_ALARM_ALERT_URI }
-        val alarm = set(RingtoneManager.TYPE_ALARM)
-        val ringtone = set(RingtoneManager.TYPE_RINGTONE)
-        return (listOfNotNull(Settings.System.DEFAULT_ALARM_ALERT_URI.takeIf { alarm != null }, alarm,
-            Settings.System.DEFAULT_RINGTONE_URI.takeIf { ringtone != null }, ringtone) + Settings.System.DEFAULT_NOTIFICATION_URI).distinct()
+    /** Sininho: the default, and what an alarm plays when hers can't sound. */
+    const val DEFAULT = "sininho"
+
+    /** A phone sound's address (`content://…`), as opposed to a preset's id, "vibrate" or "silent". */
+    fun phone(sound: String): Boolean = "://" in sound
+
+    /** A preset's raw resource address (`android.resource://<package>/raw/pinkoo_<id>`), or null when the app ships no
+     * such file. Readable before the first unlock after a reboot: it lives in the APK. */
+    fun preset(c: Context, id: String): Uri? {
+        val name = "pinkoo_" + id.lowercase().filter { it.isLetterOrDigit() || it == '_' }
+        if (c.resources.getIdentifier(name, "raw", c.packageName) == 0) return null
+        return Uri.parse("android.resource://${c.packageName}/raw/$name")
+    }
+
+    /** The raw resource id of a preset, or 0. */
+    fun raw(c: Context, id: String): Int = c.resources.getIdentifier("pinkoo_" + id.lowercase().filter { it.isLetterOrDigit() || it == '_' }, "raw", c.packageName)
+
+    /** What a reminder channel for [sound] plays: none for "Só vibrar" and "Sem som"; a preset's file (the platform's
+     * notification sound where the app ships none); a phone sound's address. */
+    fun notification(c: Context, sound: String): Uri? = when {
+        sound == "vibrate" || sound == "silent" -> null
+        phone(sound) -> Uri.parse(sound)
+        else -> preset(c, sound) ?: preset(c, DEFAULT) ?: Settings.System.DEFAULT_NOTIFICATION_URI
+    }
+
+    /** What the alarm tries, in order: her sound, then the default preset (an alarm must sound), then the platform's
+     * alarm where the app ships no preset. */
+    fun ring(c: Context, sound: String): List<Uri> = listOfNotNull(
+        if (phone(sound)) Uri.parse(sound) else if (sound != "vibrate" && sound != "silent") preset(c, sound) else null,
+        preset(c, DEFAULT), Settings.System.DEFAULT_ALARM_ALERT_URI,
+    ).distinct()
+
+    /**
+     * Her alarm volume, 20 to 100%, as the player's own volume through a decibel curve: 20% is −20 dB, 100% is 0 dB,
+     * so each notch sounds like the same change (`MediaPlayer.setVolume` is a linear amplitude, and a straight share
+     * would leave the slider's lower half nearly silent on a phone whose alarm stream is already low).
+     */
+    fun gain(share: Double): Float {
+        val s = share.coerceIn(0.2, 1.0)
+        return 10.0.pow((s - 1.0) * 25.0 / 20.0).toFloat()
+    }
+
+    /** Whether Pinkoo's own process can open [uri]: Android silently swaps a sound the app can't read for its default
+     * in the posted notification, so a phone sound is refused at the pick when it can't. */
+    fun readable(c: Context, uri: Uri): Boolean = runCatching {
+        c.contentResolver.openInputStream(uri)?.use { it.read(); true } ?: false
+    }.getOrDefault(false)
+
+    /** A player for [sound] with [usage], looping or not, at [gain]; the default preset when hers can't be opened. */
+    fun player(c: Context, sound: String, usage: Int, gain: Float, looping: Boolean): MediaPlayer? {
+        for (uri in ring(c, sound)) {
+            val p = MediaPlayer()
+            try {
+                p.setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                p.setDataSource(c, uri)
+                p.isLooping = looping
+                p.setVolume(gain, gain)
+                p.prepare()
+                p.start()
+                return p
+            } catch (e: Exception) {
+                android.util.Log.w("pinkoo.nag", "sound: $uri: $e")
+                p.release()
+            }
+        }
+        return null
+    }
+
+    /** The soft vibration a reminder brings, repeating while the alarm rings. */
+    val PATTERN = longArrayOf(0, 400, 800)
+
+    fun vibrate(c: Context, repeat: Boolean, usage: Int = VibrationAttributes.USAGE_ALARM) {
+        val v = c.getSystemService(Vibrator::class.java)?.takeIf { it.hasVibrator() } ?: return
+        val effect = VibrationEffect.createWaveform(PATTERN, if (repeat) 0 else -1)
+        if (Build.VERSION.SDK_INT >= 33) v.vibrate(effect, VibrationAttributes.createForUsage(usage))
+        else @Suppress("DEPRECATION") v.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
     }
 }
 
 class NagService : Service() {
     companion object {
+        /** The alarm rings for at most this long; the test's sample for [TEST_MS]. */
+        const val RING_MS = 60_000L
+        const val TEST_MS = 10_000L
+        /** The power key's press that wakes a dark phone counts once the ring has played this long. */
+        const val SCREEN_ON_AFTER_MS = 1_000L
+
         @Volatile internal var running: NagService? = null
         /** The alarm receiver's wake lock, released once the service has started. */
         @Volatile internal var waking: PowerManager.WakeLock? = null
         /** A start is on its way: the wake lock waits for it. */
         @Volatile internal var starting = false
+
+        /** A ring asked for: the alarm's for [nag], or the experience test's sample ([test]), playing [sound] at the
+         * share [volume] for at most [cap] ms. */
+        internal data class Ring(val nag: Int, val sound: String, val volume: Double, val cap: Long, val test: Boolean)
+
+        /** The ring the surface asks for now, or null. */
+        @Volatile internal var ring: Ring? = null
+        /** The last alarm whose ring started: a ring plays once per nag, whatever asks again ([Out.ring] comes at every
+         * refresh). */
+        @Volatile internal var rang = 0
+        /** The service notification's words ("Bolota está por aqui"). */
+        @Volatile internal var words = ""
 
         /** The alarm receiver's wake lock let go: the service started, or none will. */
         internal fun release() {
@@ -60,69 +157,40 @@ class NagService : Service() {
             waking = null
         }
 
-        /** Whether [live] needs the service: something rings, or a holding nuisance is on. */
-        internal fun needed(c: Context, live: Live): Boolean =
-            live.ringing.isNotEmpty() || (live.groups.isNotEmpty() && Nuisances.holding(c, live))
+        /** Whether anything needs the service: a ring, the bubble, the unlock wait, a test that holds it. */
+        internal fun needed(): Boolean = ring != null || Nuisances.holding() || Rehearsal.holding
 
-        /**
-         * The service brought to [live]: started when something rings or a holding nuisance is on, told otherwise.
-         * Returns whether it shows the nag notification, which the engine then leaves to it.
-         */
-        internal fun sync(c: Context, live: Live): Boolean {
-            val need = needed(c, live)
+        /** Whether the alarm rings for [nag] now. */
+        internal fun ringing(nag: Int): Boolean = ring?.let { it.nag == nag && !it.test } == true
+
+        /** The service brought to what is needed: started (from the alarm's exemption, or with an overlay showing), told,
+         * or finished. Whether it runs. */
+        internal fun sync(c: Context): Boolean {
+            val need = needed()
             val s = running
-            if (s != null) { if (need) s.update(live) else s.finish(live); return need }
+            if (s != null) { if (need) s.update() else s.finish(); return need }
             if (!need) return false
             return runCatching { c.startForegroundService(Intent(c, NagService::class.java)); starting = true; true }
                 .onFailure { android.util.Log.w("pinkoo.nag", "service: $it") }.getOrDefault(false)
         }
 
-        /**
-         * The person's alarm sound ([Sounds.ring]) on the alarm stream, which Do Not Disturb lets through by default,
-         * looping at [volume] of the stream's level (`MediaPlayer.setVolume` scales this player alone).
-         */
-        internal fun player(c: Context, volume: Double): MediaPlayer? {
-            for (uri in Sounds.ring(c)) {
-                val p = MediaPlayer()
-                try {
-                    p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-                    p.setDataSource(c, uri)
-                    p.isLooping = true
-                    p.setVolume(volume.toFloat(), volume.toFloat())
-                    p.prepare()
-                    p.start()
-                    return p
-                } catch (e: Exception) {
-                    android.util.Log.w("pinkoo.nag", "ring: $uri: $e")
-                    p.release()
-                }
-            }
-            return null
-        }
-
-        /** The vibration at [rung]: longer pulses, shorter pauses as it climbs. */
-        private fun pattern(rung: Int): LongArray = when (rung) {
-            0 -> longArrayOf(0, 400, 800)
-            1 -> longArrayOf(0, 600, 500)
-            else -> longArrayOf(0, 900, 250)
-        }
-
-        /** [rung]'s vibration, repeating, as an alarm's (the ring test's too). */
-        internal fun vibrate(c: Context, rung: Int) {
-            val v = c.getSystemService(Vibrator::class.java) ?: return
-            val effect = VibrationEffect.createWaveform(pattern(rung), 0)
-            if (Build.VERSION.SDK_INT >= 33) v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
-            else @Suppress("DEPRECATION") v.vibrate(effect, AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+        /** The alarm stopped now, before the engine hears of it: it never starts again for that nag. */
+        internal fun silence(c: Context) {
+            ring?.let { if (!it.test) rang = it.nag }
+            ring = null
+            running?.quiet()
+            sync(c)
         }
     }
 
     private val main = Handler(Looper.getMainLooper())
     private var player: MediaPlayer? = null
-    private var playing = -1.0
-    private var vibrating = -1
-    /** The earliest ring's end it times, and its timer. */
-    private var ringEndAt = 0L
-    private val ringEnd = Runnable { val at = ringEndAt; ringEndAt = 0; Engine.ringOut(this, at) }
+    /** What plays now, and since when (uptime). */
+    private var playing: Ring? = null
+    private var playedSince = 0L
+    private var vibrating = false
+    private var stops: BroadcastReceiver? = null
+    private val cap = Runnable { capped() }
     private var foreground = false
     /** The latest start delivered: stopping with it ends the service only when no newer start is on its way. */
     private var lastStart = 0
@@ -133,94 +201,96 @@ class NagService : Service() {
         running = this
         lastStart = startId
         starting = false
-        val live = runCatching { Engine.live(this) }.getOrNull()
-        // A service started with startForegroundService must enter the foreground, or the system ends the app; and it
-        // stops at once when nothing needs it any more (resolved, opened or ignored before it started).
-        val shown = live != null && live.groups.isNotEmpty() &&
-            runCatching { update(live); foreground }.onFailure { android.util.Log.e("pinkoo.nag", "service", it) }.getOrDefault(false)
-        // A bare notification, which finish replaces with the waiting nag or takes away.
-        if (!shown) enter(Shade.nagId(live?.nag ?: 0), Notification.Builder(this, Shade.CH_WAITING).setSmallIcon(Shade.icon(this)).build())
-        if (live == null || !shown || !needed(this, live)) finish(live)
+        // A service started with startForegroundService must enter the foreground, or the system ends the app; it stops
+        // at once when nothing needs it any more (answered, opened or hidden before it started).
+        runCatching { enter() }.onFailure { android.util.Log.e("pinkoo.nag", "service", it) }
+        if (needed()) update() else finish()
         release()
         return START_NOT_STICKY
     }
 
-    /** In the foreground with [n] as [id]: a new id (a new loud nag) replaces the notification the service had. */
-    private fun enter(id: Int, n: Notification) {
+    private fun enter() {
+        if (foreground) return
+        val n = Shade.service(this, words.ifEmpty { Store.plan(this)?.texts?.service ?: "" })
         if (Build.VERSION.SDK_INT >= 34) {
             val exact = getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
             val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or (if (exact) ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED else 0)
-            startForeground(id, n, types)
-        } else startForeground(id, n)
+            startForeground(Shade.SERVICE, n, types)
+        } else startForeground(Shade.SERVICE, n)
         foreground = true
     }
 
-    /** The notification, the ring and the nuisances brought to [live]; a nuisance that fails stops neither the ring nor
-     * the others. The notification is posted only when it changed, but always as the service enters the foreground,
-     * which a start for the foreground must. */
-    internal fun update(live: Live) {
-        Shade.nag(this, live, loud = live.ringing.isNotEmpty(), force = !foreground) { id, n -> enter(id, n) }
-        runCatching { ring(live) }.onFailure { android.util.Log.e("pinkoo.nag", "ring", it) }
-        runCatching { Nuisances.apply(this, live) }.onFailure { android.util.Log.e("pinkoo.nag", "nuisances", it) }
+    /** The ring brought to what is asked: started once per ring, or stopped. */
+    internal fun update() {
+        val r = ring
+        if (r == null) { quiet(); return }
+        if (playing == r) return
+        quiet()
+        play(r)
     }
 
-    /** Nothing rings and nothing needs the process: the ring stops, the nag notification stays while something waits. */
-    internal fun finish(live: Live?) {
-        silence()
-        if (live != null) Nuisances.apply(this, live)
-        if (foreground) {
-            val waiting = live != null && live.groups.isNotEmpty() && !(live.st.swiped == live.nag && !Nuisances.returning(this, live))
-            if (waiting) {
-                Shade.nag(this, live!!, loud = false, force = true) { id, n -> Shade.notify(this, id, n) }
-                stopForeground(STOP_FOREGROUND_DETACH)
-            } else {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                Shade.cancelNag(this)
+    private fun play(r: Ring) {
+        playing = r
+        if (!r.test) rang = r.nag
+        player = Sounds.player(this, r.sound, AudioAttributes.USAGE_ALARM, Sounds.gain(r.volume), looping = true)
+        if (player == null) android.util.Log.w("pinkoo.nag", "ring: no sound")
+        if (r.sound != "silent" && getSystemService(Vibrator::class.java)?.hasVibrator() == true) { Sounds.vibrate(this, repeat = true); vibrating = true }
+        playedSince = SystemClock.uptimeMillis()
+        listen()
+        main.removeCallbacks(cap)
+        main.postDelayed(cap, r.cap)
+    }
+
+    /** The stop contract's screen and unlock signals, only while a sound plays. */
+    private fun listen() {
+        if (stops != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val now = playing ?: return
+                when (intent.action) {
+                    Intent.ACTION_USER_PRESENT -> AndroidOut.stopped(this@NagService, now.nag, "unlock", now.test)
+                    Intent.ACTION_SCREEN_OFF -> AndroidOut.stopped(this@NagService, now.nag, "power", now.test)
+                    Intent.ACTION_SCREEN_ON -> if (SystemClock.uptimeMillis() - playedSince >= SCREEN_ON_AFTER_MS)
+                        AndroidOut.stopped(this@NagService, now.nag, "power", now.test)
+                }
             }
-            foreground = false
         }
-        running = null
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_USER_PRESENT); addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON)
+        }
+        // Exported: SystemUI sends the unlock, which an unexported receiver doesn't hear; all three are protected.
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(r, filter, Context.RECEIVER_EXPORTED) else registerReceiver(r, filter)
+        stops = r
+    }
+
+    /** The cap: the alarm rang out unanswered (the core's `timeout`), or the test's sample ended. */
+    private fun capped() {
+        val r = playing ?: return
+        AndroidOut.stopped(this, r.nag, "cap", r.test)
+    }
+
+    /** Nothing plays: the player, the vibration, the screen signals and the cap gone. */
+    internal fun quiet() {
+        player?.runCatching { stop(); release() }
+        player = null
+        playing = null
+        if (vibrating) getSystemService(Vibrator::class.java)?.cancel()
+        vibrating = false
+        stops?.let { runCatching { unregisterReceiver(it) } }
+        stops = null
+        main.removeCallbacks(cap)
+    }
+
+    /** Nothing needs the process: the ring stops and the service's own notification goes with it. */
+    internal fun finish() {
+        quiet()
+        if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false }
+        if (running === this) running = null
         stopSelf(lastStart)
     }
 
-    private fun ring(live: Live) {
-        if (live.ringing.isEmpty() || "ring" !in live.ringing.flatMap { live.plan.words(Rules.rung(live.plan, live.st, it)) }) { silence(); return }
-        val volume = live.plan.volume(live.ringingRung)
-        if (player == null) play(volume) else if (volume != playing) player?.setVolume(volume.toFloat(), volume.toFloat())
-        playing = volume
-        if (vibrating != live.ringingRung) vibrate(live.ringingRung)
-        // Each ring ends unanswered at its ring's end, on the uptime clock, which no change of the wall clock moves.
-        val end = live.ringing.mapNotNull { Rules.ringEnd(live.plan, it) }.minOrNull() ?: return
-        if (end != ringEndAt) {
-            main.removeCallbacks(ringEnd)
-            ringEndAt = end
-            main.postDelayed(ringEnd, (end - Engine.clock()).coerceIn(0, live.plan.ladder.ringSec * 1000L))
-        }
-    }
-
-    private fun play(volume: Double) {
-        player = player(this, volume)
-        if (player == null) android.util.Log.w("pinkoo.nag", "ring: no alarm sound")
-    }
-
-    private fun vibrate(rung: Int) {
-        if (getSystemService(Vibrator::class.java) == null) return
-        vibrating = rung
-        vibrate(this, rung)
-    }
-
-    private fun silence() {
-        player?.runCatching { stop(); release() }
-        player = null
-        playing = -1.0
-        if (vibrating >= 0) getSystemService(Vibrator::class.java)?.cancel()
-        vibrating = -1
-        main.removeCallbacks(ringEnd)
-        ringEndAt = 0
-    }
-
     override fun onDestroy() {
-        silence()
+        quiet()
         if (running === this) running = null
         super.onDestroy()
     }

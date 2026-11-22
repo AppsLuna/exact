@@ -1,0 +1,347 @@
+{
+  "about": [
+    "The gentle reminder's thread, one shared scenario run through both layers (L121): src/domain's ladder.test.ts and @pinkoo/nag's RulesTest (its copy is packages/pinkoo-nag/test/thread-scenarios.json; the integrator checks the two with cmp). The rules are docs/product.md > Nagging, The pace, Her answers and A promise.",
+    "Times are wall-clock local times in `zone`. Each case is one dose nobody takes; the phone is locked and every access is granted, so each step posts what it carries.",
+    "`pace` names one of `paces` or is a pace object { firstMin, thenMin, repeatFirstMin, repeatEveryMin, repeats } (plan shape v2's NagLadder). firstMin: Notificacao to De novo. thenMin: to each next step on (Tela cheia, then the alarm 'Só se passar de tudo'). Repeats: the first repeatFirstMin after the last step, the others repeatEveryMin apart. A step that's off takes no time.",
+    "`steps` is the plan's { bubble, fullScreen, unlock }; `alarm` is the dose's off | afterAll | onTime.",
+    "`events` are her answers, applied in time order; an event at the same minute as a fire comes after it. do: notNow ('Agora não': the next step moves to max(when it was due, the tap + that step's own gap), never moving the step), promise (until: the deadline; nothing comes for the dose until then), swipe and open (change nothing).",
+    "`expect` is every fire of the dose in order, and nothing else before `dose.miss`. step: notify | again | full | alarm | repeat | deadline. rung: the reminders that reached her before this one (fires), capped at 4; a deadline counts as a fire but is not one of the repeats. sounding: the post plays her sound. folded: the step rides in the alarm's own notification, silent, and only the ring sounds ('Já na hora', and a promise's deadline for such a dose).",
+    "`notNow` are probes, not events: what 'Agora não' would say if tapped at `at` (after every fire and event at or before `at`). kind: remind | alarm | wait; next: the time it names, null for wait (nothing comes before the dose is missed: after the last repeat, or a next step that would fall at or past dose.miss)."
+  ],
+  "zone": "America/Sao_Paulo",
+  "paces": {
+    "comCalma": { "firstMin": 30, "thenMin": 30, "repeatFirstMin": 60, "repeatEveryMin": 60, "repeats": 2 },
+    "noRitmo": { "firstMin": 20, "thenMin": 15, "repeatFirstMin": 30, "repeatEveryMin": 60, "repeats": 3 },
+    "dePertinho": { "firstMin": 10, "thenMin": 10, "repeatFirstMin": 20, "repeatEveryMin": 20, "repeats": 3 }
+  },
+  "cases": [
+    {
+      "name": "No ritmo, Bolinha and Tela cheia on, no alarm",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:00", "kind": "remind", "next": "2026-11-18T20:20" },
+        { "at": "2026-11-18T20:10", "kind": "remind", "next": "2026-11-18T20:30" },
+        { "at": "2026-11-18T20:21", "kind": "remind", "next": "2026-11-18T20:36" },
+        { "at": "2026-11-18T20:35", "kind": "remind", "next": "2026-11-18T21:05" },
+        { "at": "2026-11-18T22:30", "kind": "remind", "next": "2026-11-18T23:30" },
+        { "at": "2026-11-18T23:05", "kind": "wait", "next": null }
+      ]
+    },
+    {
+      "name": "No ritmo, everything on, the alarm 'Só se passar de tudo'",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": true },
+      "alarm": "afterAll",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 3 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:50", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T21:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:35", "kind": "alarm", "next": "2026-11-18T20:50" },
+        { "at": "2026-11-18T20:40", "kind": "alarm", "next": "2026-11-18T20:55" },
+        { "at": "2026-11-18T20:50", "kind": "remind", "next": "2026-11-18T21:20" },
+        { "at": "2026-11-18T23:20", "kind": "wait", "next": null }
+      ]
+    },
+    {
+      "name": "No ritmo, only the notification",
+      "pace": "noRitmo",
+      "steps": { "bubble": false, "fullScreen": false, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:50", "step": "repeat", "rung": 2, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:50", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:50", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:20", "kind": "remind", "next": "2026-11-18T20:50" },
+        { "at": "2026-11-18T22:50", "kind": "wait", "next": null }
+      ]
+    },
+    {
+      "name": "Tela cheia off: the alarm counts from De novo",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": false, "unlock": false },
+      "alarm": "afterAll",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "alarm", "rung": 2, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:20", "kind": "alarm", "next": "2026-11-18T20:35" }
+      ]
+    },
+    {
+      "name": "'Já na hora': the dose time's notification folded into the alarm",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "onTime",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:00", "kind": "remind", "next": "2026-11-18T20:20" }
+      ]
+    },
+    {
+      "name": "'Agora não' at 20:10 moves 20:20 to 20:30, and a second tap moves it again by the same rule",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:10", "do": "notNow" },
+        { "at": "2026-11-18T20:25", "do": "notNow" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:45", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:00", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:30", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:10", "kind": "remind", "next": "2026-11-18T20:30" },
+        { "at": "2026-11-18T20:20", "kind": "remind", "next": "2026-11-18T20:40" },
+        { "at": "2026-11-18T20:25", "kind": "remind", "next": "2026-11-18T20:45" }
+      ]
+    },
+    {
+      "name": "'Agora não' at the dose time keeps 20:20: never sooner than it was due, never later than one gap after the tap",
+      "pace": "noRitmo",
+      "steps": { "bubble": false, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:00", "do": "notNow" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": []
+    },
+    {
+      "name": "A swipe and opening the nag screen change nothing",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:01", "do": "swipe" },
+        { "at": "2026-11-18T20:22", "do": "open" },
+        { "at": "2026-11-18T20:23", "do": "swipe" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:01", "kind": "remind", "next": "2026-11-18T20:21" }
+      ]
+    },
+    {
+      "name": "A promise: nothing until its deadline, the notification at the deadline, then the next step she hadn't reached one gap later",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:05", "do": "promise", "until": "2026-11-18T20:20" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "deadline", "rung": 1, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:40", "step": "again", "rung": 2, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:55", "step": "full", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:25", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:25", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:25", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:20", "kind": "remind", "next": "2026-11-18T20:40" }
+      ]
+    },
+    {
+      "name": "A promise after De novo: the full screen she hadn't reached comes after the deadline, once",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "afterAll",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:25", "do": "promise", "until": "2026-11-18T20:55" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:55", "step": "deadline", "rung": 2, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:10", "step": "full", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:25", "step": "alarm", "rung": 4, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T21:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:55", "kind": "remind", "next": "2026-11-18T21:10" },
+        { "at": "2026-11-18T21:10", "kind": "alarm", "next": "2026-11-18T21:25" }
+      ]
+    },
+    {
+      "name": "A promise on a 'Já na hora' dose: the alarm rings at the deadline, the notification folded into it",
+      "pace": "noRitmo",
+      "steps": { "bubble": false, "fullScreen": false, "unlock": false },
+      "alarm": "onTime",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [
+        { "at": "2026-11-18T20:02", "do": "promise", "until": "2026-11-18T20:30" }
+      ],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:30", "step": "deadline", "rung": 1, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:50", "step": "again", "rung": 2, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:20", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": []
+    },
+    {
+      "name": "The dose missed before the last repeat: nothing past it, and 'Agora não' says the dose waits on Hoje",
+      "pace": "noRitmo",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-18T22:30", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T21:10", "kind": "remind", "next": "2026-11-18T22:10" },
+        { "at": "2026-11-18T21:45", "kind": "wait", "next": null },
+        { "at": "2026-11-18T22:05", "kind": "wait", "next": null }
+      ]
+    },
+    {
+      "name": "Com calma, Bolinha and Tela cheia on: two repeats",
+      "pace": "comCalma",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 1 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:30", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:00", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T22:00", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T23:00", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T23:00", "kind": "wait", "next": null }
+      ]
+    },
+    {
+      "name": "De pertinho, everything on, the alarm after all",
+      "pace": "dePertinho",
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "afterAll",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:10", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:20", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:30", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:50", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:10", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": []
+    },
+    {
+      "name": "Meu jeito 5/5, repeats every 15 min, 3 repeats (the app drive's settings)",
+      "pace": { "firstMin": 5, "thenMin": 5, "repeatFirstMin": 15, "repeatEveryMin": 15, "repeats": 3 },
+      "steps": { "bubble": true, "fullScreen": true, "unlock": false },
+      "alarm": "afterAll",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:05", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:10", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:15", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:45", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T21:00", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:12", "kind": "alarm", "next": "2026-11-18T20:17" }
+      ]
+    },
+    {
+      "name": "Meu jeito with no repeats: the steps, then nothing",
+      "pace": { "firstMin": 30, "thenMin": 20, "repeatFirstMin": 60, "repeatEveryMin": 60, "repeats": 0 },
+      "steps": { "bubble": false, "fullScreen": true, "unlock": false },
+      "alarm": "off",
+      "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
+      "events": [],
+      "expect": [
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:30", "step": "again", "rung": 1, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
+        { "at": "2026-11-18T20:50", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false }
+      ],
+      "notNow": [
+        { "at": "2026-11-18T20:30", "kind": "remind", "next": "2026-11-18T20:50" },
+        { "at": "2026-11-18T20:50", "kind": "wait", "next": null }
+      ]
+    }
+  ]
+}

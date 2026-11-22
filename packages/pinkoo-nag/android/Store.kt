@@ -1,5 +1,5 @@
 // What the engine keeps, in device-protected storage so the receivers read it before the first unlock after a boot: the
-// last plan, the ladder's state per group, and the events the app has not acknowledged yet.
+// last plan, each dose time's place on its thread of steps, and the events the app has not acknowledged yet.
 package pinkoo.nag
 
 import android.content.Context
@@ -9,48 +9,80 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 
-/** A group's place on the ladder: one nag, one ring and one ignore count for every dose due at the same time. */
+/**
+ * A dose time's thread (`docs/product.md` › Nagging): one notification, one step and one count of reminders for every
+ * dose due at the same time. Only time moves it along its steps; nothing she does makes it louder.
+ */
 internal class Group(
     val group: String,
-    /** `upcoming`, `ringing`, `pending`, `promised` (every open dose of it under a promise, [until] the earliest
-     * deadline) or `done`. */
+    /** `upcoming` (its time not come), `pending` (a step fired, the next one waits), `ringing` (its alarm rings),
+     * `promised` (every open dose of it under a promise, [until] the earliest deadline) or `done`. */
     var state: String = "upcoming",
-    var ignores: Int = 0,
-    /** The last nag (a fire's number) the group rang in, and the last one counted as ignored. */
+    /** The last step of the thread that fired (`NOTIFY` to `ALARM`, then `REPEAT`); a promise's deadline doesn't move
+     * it. Null before the dose time's notification. */
+    var step: Step? = null,
+    /** The last post's own step: [step], or `DEADLINE` at a promise's deadline. */
+    var last: Step? = null,
+    /** The repeats that fired, up to the plan's (3 at most). */
+    var repeats: Int = 0,
+    /** The reminders that reached her: steps, repeats and deadlines that fired. */
+    var fires: Int = 0,
+    /** The post (a fire's number) the group last fired in. */
     var nag: Int = 0,
-    var ignoredNag: Int = 0,
-    /** The next loud nag while pending; while ringing, the one that follows should the process die mid-ring. */
+    /** When its next step is due: one gap after the step before it, or after her "Agora não" when that is later. Null
+     * before the dose time (its time is the group's) and with no step left. */
     var nextAt: Long? = null,
     var until: Long? = null,
     var lastFiredAt: Long? = null,
+    /** She swiped its post away, or said "Agora não": no post brings it back until its next step. */
+    var dismissed: Boolean = false,
+    /** The bubble was sent to the nest during this step: it stays away until the next one, across a process death. */
+    var nested: Boolean = false,
+    /** "Abrir quando eu desbloquear" is done for this dose time: the nag screen opened, or "Agora não". */
+    var unlocked: Boolean = false,
+    /** A step came due with no notification able to reach her: it waits, silently, for them to come back. */
+    var muted: Boolean = false,
 ) {
-    fun json(): JSONObject = JSONObject().put("group", group).put("state", state).put("ignores", ignores).put("nag", nag)
-        .put("ignoredNag", ignoredNag).put("nextAt", nextAt ?: JSONObject.NULL).put("until", until ?: JSONObject.NULL)
-        .put("lastFiredAt", lastFiredAt ?: JSONObject.NULL)
+    fun json(): JSONObject = JSONObject().put("group", group).put("state", state).put("step", step?.name ?: JSONObject.NULL)
+        .put("last", last?.name ?: JSONObject.NULL).put("repeats", repeats).put("fires", fires).put("nag", nag)
+        .put("nextAt", nextAt ?: JSONObject.NULL).put("until", until ?: JSONObject.NULL).put("lastFiredAt", lastFiredAt ?: JSONObject.NULL)
+        .put("dismissed", dismissed).put("nested", nested).put("unlocked", unlocked).put("muted", muted)
 
     companion object {
-        fun from(o: JSONObject) = Group(o.getString("group"), o.optString("state", "upcoming"), o.optInt("ignores"), o.optInt("nag"),
-            o.optInt("ignoredNag"), long(o, "nextAt"), long(o, "until"), long(o, "lastFiredAt"))
+        fun from(o: JSONObject) = Group(o.getString("group"), o.optString("state", "upcoming"), step(o, "step"), step(o, "last"),
+            o.optInt("repeats"), o.optInt("fires"), o.optInt("nag"), long(o, "nextAt"), long(o, "until"), long(o, "lastFiredAt"),
+            o.optBoolean("dismissed"), o.optBoolean("nested"), o.optBoolean("unlocked"), o.optBoolean("muted")).also {
+                // A state of version 2 (the ladder of ignores): its counts, which [Rules.upgrade] maps to a step.
+                it.ignores = o.optInt("ignores"); it.ignoredNag = o.optInt("ignoredNag")
+            }
+
+        private fun step(o: JSONObject, k: String): Step? = if (o.isNull(k)) null else runCatching { Step.valueOf(o.optString(k)) }.getOrNull()
     }
+
+    /** Version 2's ignore count and last ignored nag, read only to upgrade it. Not kept. */
+    var ignores = 0
+    var ignoredNag = 0
 }
 
 /**
  * A dose's own outcome: `open`, `resolved` (taken, skipped) or `lapsed` (missed). While open, [until] is its pinky
- * promise's deadline (one per medication: the group's other doses keep nagging), and [behind] the group's ignores it sat
- * out under promises, so it comes back at its own rung.
+ * promise's deadline (one per medication: the group's other doses keep their thread), [behind] the group's reminders it
+ * sat out under promises, so it keeps its own count, and [full] whether it has had its full screen (once per dose).
  */
-internal class DoseState(val key: String, var state: String = "open", var at: Long? = null, var until: Long? = null, var behind: Int = 0) {
+internal class DoseState(val key: String, var state: String = "open", var at: Long? = null, var until: Long? = null, var behind: Int = 0,
+    var full: Boolean = false) {
     fun json(): JSONObject = JSONObject().put("key", key).put("state", state).put("at", at ?: JSONObject.NULL)
-        .put("until", until ?: JSONObject.NULL).put("behind", behind)
+        .put("until", until ?: JSONObject.NULL).put("behind", behind).put("full", full)
     companion object {
-        fun from(o: JSONObject) = DoseState(o.getString("key"), o.optString("state", "open"), long(o, "at"), long(o, "until"), o.optInt("behind"))
+        fun from(o: JSONObject) = DoseState(o.getString("key"), o.optString("state", "open"), long(o, "at"), long(o, "until"), o.optInt("behind"),
+            o.optBoolean("full"))
     }
 }
 
 internal class State(
     val groups: LinkedHashMap<String, Group> = LinkedHashMap(),
     val doses: LinkedHashMap<String, DoseState> = LinkedHashMap(),
-    /** The last nag's number. */
+    /** The last post's number. */
     var nag: Int = 0,
     var event: Long = 0,
     /** The plan's text the state was merged from, which a plan sent again unchanged skips. */
@@ -60,43 +92,48 @@ internal class State(
     var staleShown: Long = 0,
     /** The local date the low-stock notice was last posted on. */
     var stockDay: String = "",
-    /** The nag whose waiting notification was swiped while nothing brings it back. */
-    var swiped: Int = 0,
+    /** The post the notification's "Agora não" answered, and when its confirmation ("Combinado: …") goes: until then no
+     * refresh touches it. */
+    var confirm: Int = 0,
+    var confirmUntil: Long = 0,
     /** The promise deadline whose notification the person dismissed: not shown again for it. */
     var promiseDismissed: Long = 0,
-    /** The nag the person closed the bubble in: it stays closed until the next, across a process death (decision 5). */
-    var bubbleClosed: Int = 0,
-    /** The last nag that rang with the app in front: no heads-up and no full-screen intent to its end, across a
+    /** The last post that fired with the app in front: no heads-up and no full-screen intent to its end, across a
      * process death, so leaving the app or a restart never pops it up (decision 17). */
     var quiet: Int = 0,
-    /** The nag that rang with the app in front and that the nag screen has not shown yet, or 0: the app reads it
-     * (`nagState().front`) and brings the nag screen itself, or a banner over a form (decision 7). Kept across a process
-     * death; a later nag replaces it, and a loud one in the background clears it. */
+    /** The post that fired with the app in front and that the nag screen has not shown yet, or 0: the app reads it
+     * (`nagState().front`) and shows the banner, or opens the nag screen for the full screen and the alarm (decision
+     * 7, item 17). Kept across a process death; a later post replaces it, and one in the background clears it. */
     var front: Int = 0,
-    /** The last nag that came due with the app in front while no ring could be stopped (notifications off): it rang
-     * nothing, and the app opens the nag screen for it all the same (item 20, `nagState().front`, `?via=silent`). */
+    /** The last post that came due with the app in front while no notification could reach her (notifications off):
+     * it showed nothing, and the app opens the nag screen for it all the same (item 20, `?via=silent`). */
     var silent: Int = 0,
-    /** When [silent] came due: the front's `at`, as a nag that rang has its fire's. */
+    /** When [silent] came due: the front's `at`, as a post that fired has its fire's. */
     var silentAt: Long = 0,
     /** Made anew, not read: there was no state file, or it could not be read. Not kept. */
     val fresh: Boolean = false,
-    /** The state's version: 2 since promises are per dose ([Rules.upgrade] brings a 1 up). */
+    /** The state's version: 3 since the thread of steps ([Rules.upgrade] brings a 1 or a 2 up). */
     var v: Int = VERSION,
 ) {
+    /** Version 2's swiped nag and closed bubble, read only to upgrade them. Not kept. */
+    var swiped = 0
+    var bubbleClosed = 0
+
     fun json(): JSONObject = JSONObject().put("v", v)
         .put("groups", JSONArray(groups.values.map { it.json() })).put("doses", JSONArray(doses.values.map { it.json() }))
         .put("nag", nag).put("event", event).put("planHash", planHash).put("planAt", planAt).put("staleShown", staleShown)
-        .put("stockDay", stockDay).put("swiped", swiped).put("promiseDismissed", promiseDismissed).put("bubbleClosed", bubbleClosed)
+        .put("stockDay", stockDay).put("confirm", confirm).put("confirmUntil", confirmUntil).put("promiseDismissed", promiseDismissed)
         .put("quiet", quiet).put("front", front).put("silent", silent).put("silentAt", silentAt)
 
     companion object {
-        const val VERSION = 2
+        const val VERSION = 3
 
         fun from(o: JSONObject): State {
             val s = State(nag = o.optInt("nag"), event = o.optLong("event"), planHash = o.optInt("planHash"), planAt = o.optLong("planAt"),
-                staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), swiped = o.optInt("swiped"),
-                promiseDismissed = o.optLong("promiseDismissed"), bubbleClosed = o.optInt("bubbleClosed"), quiet = o.optInt("quiet"),
+                staleShown = o.optLong("staleShown"), stockDay = o.optString("stockDay"), confirm = o.optInt("confirm"),
+                confirmUntil = o.optLong("confirmUntil"), promiseDismissed = o.optLong("promiseDismissed"), quiet = o.optInt("quiet"),
                 front = o.optInt("front"), silent = o.optInt("silent"), silentAt = o.optLong("silentAt"), v = o.optInt("v", 1))
+            s.swiped = o.optInt("swiped"); s.bubbleClosed = o.optInt("bubbleClosed")
             o.optJSONArray("groups")?.let { a -> for (i in 0 until a.length()) Group.from(a.getJSONObject(i)).let { s.groups[it.group] = it } }
             o.optJSONArray("doses")?.let { a -> for (i in 0 until a.length()) DoseState.from(a.getJSONObject(i)).let { s.doses[it.key] = it } }
             return s
@@ -104,13 +141,16 @@ internal class State(
     }
 }
 
-/** What happened to a dose that the app records in its history: `fired`, `ignored` (with its reason), `opened`, `lapsed`. */
-internal class Event(val id: Long, val key: String, val kind: String, val reason: String?, val at: Long) {
+/** What happened to a dose that the app records in its history: `fired` (with its [step]), `ignored` (with its
+ * reason: `notNow`, her "Agora não", which moves the next step and counts nothing; `timeout`, the alarm rang out),
+ * `opened`, `lapsed`. */
+internal class Event(val id: Long, val key: String, val kind: String, val reason: String?, val at: Long, val step: Step? = null) {
     fun json(): JSONObject = JSONObject().put("id", id.toString()).put("key", key).put("kind", kind)
-        .put("reason", reason ?: JSONObject.NULL).put("at", at)
+        .put("reason", reason ?: JSONObject.NULL).put("step", step?.let { Rules.word(it) } ?: JSONObject.NULL).put("at", at)
     companion object {
         fun from(o: JSONObject) = Event(o.optString("id").toLongOrNull() ?: 0, o.optString("key"), o.optString("kind"),
-            if (o.isNull("reason")) null else o.optString("reason"), o.optLong("at"))
+            if (o.isNull("reason")) null else o.optString("reason"), o.optLong("at"),
+            if (o.isNull("step")) null else Rules.step(o.optString("step")))
     }
 }
 

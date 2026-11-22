@@ -12,7 +12,6 @@ import android.os.Build
 
 internal object LiveUpdate : Nuisance {
     override val word = "liveUpdate"
-    override val promised = true
 
     /** Whether this Android has Live Updates at all, before the person's switch. */
     fun platform(): Boolean = Build.VERSION.SDK_INT >= 36 && Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.BAKLAVA_1
@@ -20,8 +19,7 @@ internal object LiveUpdate : Nuisance {
     override fun allowed(c: Context): Boolean =
         platform() && c.getSystemService(NotificationManager::class.java).canPostPromotedNotifications()
 
-    override fun promise(c: Context, b: Notification.Builder, live: Live) {
-        // The person may turn it off in Pinkoo's settings; the chip then shows the countdown alone.
-        if (live.plan.liveUpdate) b.setRequestPromotedOngoing(true)
-    }
+    /** The promise's notification asks to be promoted (the person may turn it off in Pinkoo's settings: the plan's
+     * `liveUpdate`; the chip then shows the countdown alone). */
+    fun promote(b: Notification.Builder) { if (platform()) b.setRequestPromotedOngoing(true) }
 }

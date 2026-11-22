@@ -1,6 +1,6 @@
 {
   "kind": "implementation",
-  "implements": "@pinkoo/nag@^1.0",
+  "implements": "@pinkoo/nag@^2.0",
   "platform": "android",
   "targets": [
     "android"
@@ -39,7 +39,7 @@
         "name": "pinkoo.nag.NagService",
         "directBootAware": true,
         "foregroundServiceType": "systemExempted|specialUse",
-        "subtype": "Rings a medication reminder the person scheduled, then keeps it on screen (a bubble, opening at unlock) until they confirm or skip the dose"
+        "subtype": "Keeps a medication reminder the person turned on: their reminder bubble over other apps for one reminder step, waiting for their next unlock to open the reminder after its full-screen step (until the next step, at most 2 hours), and the alarm they chose for a medication (up to 60 seconds)"
       }
     ],
     "permissions": [

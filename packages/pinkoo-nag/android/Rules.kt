@@ -1,18 +1,33 @@
-// The ladder's rules over the plan and the state, with no Android in them: what is due, what a fire, an ignore, an
-// opening and a resolution change, and when the next alarm is. Every outcome a dose has is an event the app records.
+// The gentle reminder's rules over the plan and the state, with no Android in them (`docs/product.md` › Nagging, The
+// pace; `docs/exact.md` › Planned: the gentle reminder, items 1, 2, 6, 14, 15 and 17): which step of its thread a dose
+// time is at, what is due, what a fire, "Agora não", a swipe, an opening and a resolution change, what a post carries,
+// and when the next alarms are. Time alone moves a thread along its steps; nothing she does makes it louder. Every
+// outcome a dose has is an event the app records.
 //
-// A group (the doses due at one time) shares one ladder: one nag, one ring, one ignore count. A pinky promise is per
-// dose ("one pinky promise per medication"): a promised dose sits the group's nags out until its deadline, while the
-// group's other open doses keep its ladder; the group itself is `promised` only while every open dose of it is.
+// A group (the doses due at one time) shares one thread: one step, one count of reminders. A pinky promise is per dose:
+// a promised dose sits the group's reminders out until its deadline, while the group's other open doses keep the thread;
+// the group itself is `promised` only while every open dose of it is.
 package pinkoo.nag
 
+import org.json.JSONObject
 import java.time.ZoneId
 
 internal object Rules {
+    /** The alarm rings at most this long (`docs/product.md` › Alarme). */
+    const val RING_MS = 60_000L
+    /** "Abrir quando eu desbloquear" waits at most this long after the full screen. */
+    const val UNLOCK_MS = 2 * 60 * 60_000L
+
+    /** A step's word in the app's shapes (`notify`, `again`, `full`, `alarm`, `repeat`, `deadline`). */
+    fun word(s: Step): String = s.name.lowercase()
+    fun step(w: String): Step? = Step.entries.firstOrNull { it.name.lowercase() == w }
+
+    // MARK: the doses
+
     /** The plan's doses of [g] still open (promised or not). */
     fun open(plan: Plan, st: State, g: Group): List<Dose> = plan.doses(g.group).filter { st.doses[it.key]?.state == "open" }
 
-    /** The open doses of [g] its nags are for: those under no pinky promise. */
+    /** The open doses of [g] its reminders are for: those under no pinky promise. */
     fun nagged(plan: Plan, st: State, g: Group): List<Dose> = open(plan, st, g).filter { st.doses[it.key]?.until == null }
 
     /** Every open dose under a pinky promise, in the plan's order. */
@@ -21,70 +36,193 @@ internal object Rules {
     /** [d]'s promise deadline, or null with none. */
     fun until(st: State, d: Dose): Long? = st.doses[d.key]?.until
 
-    /** A dose's own ignores: its group's, less the ones it sat out under a promise. */
-    private fun ownIgnores(st: State, g: Group, d: Dose): Int = maxOf(0, g.ignores - (st.doses[d.key]?.behind ?: 0))
+    /** A dose's own reminders: its group's, less the ones it sat out under a promise. */
+    fun fires(st: State, g: Group, d: Dose): Int = maxOf(0, g.fires - (st.doses[d.key]?.behind ?: 0))
+
+    /** The reminders that reached the doses [g] reminds now: the most any of its doses under no promise has (its open
+     * ones while every one is promised). */
+    fun reached(plan: Plan, st: State, g: Group): Int =
+        nagged(plan, st, g).ifEmpty { open(plan, st, g) }.maxOfOrNull { fires(st, g, it) } ?: g.fires
+
+    /** The rung of [g]'s last reminder, the one showing: the reminders that reached her before it, up to the top (4).
+     * The mascot's face and lines (`src/app/plan.ts` nagRung). */
+    fun rung(plan: Plan, st: State, g: Group): Int = minOf(maxOf(reached(plan, st, g) - 1, 0), Plan.TOP)
+
+    private fun seed(plan: Plan, st: State, g: Group): Long = open(plan, st, g).firstOrNull()?.lineSeed ?: 0
 
     /**
-     * [g]'s ignores as the nag screen counts them (`src/app/views.ts` nagView): the most any of its open doses has.
-     * Without a promise in the group, its own count; a dose back from a promise while the others climbed comes back at
-     * its own count once they are resolved (a promise never resets the ladder, nor climbs it).
+     * [g]'s mascot line, the one its last reminder showed (`src/app/plan.ts` nagLineIndex): `lines[rung][(seed + n) mod
+     * count]`, n the reminders before it and the seed its first open dose's; at a promise's deadline, the plan's line for
+     * it. The notification, the bubble and the nag screen never disagree.
      */
-    fun ignores(plan: Plan, st: State, g: Group): Int = open(plan, st, g).maxOfOrNull { ownIgnores(st, g, it) } ?: g.ignores
+    fun line(plan: Plan, st: State, g: Group, zone: ZoneId = ZoneId.systemDefault()): String {
+        if (g.last == Step.DEADLINE && plan.texts.deadline.isNotEmpty()) {
+            return fill(plan.texts.deadline, names(plan, st, listOf(g)), g.lastFiredAt, zone)
+        }
+        val n = maxOf(reached(plan, st, g) - 1, 0)
+        return plan.line(minOf(n, Plan.TOP), seed(plan, st, g), n)
+    }
 
-    /** [g]'s rung: one per ignore, up to the plan's top (4, the mascot's own top face). */
-    fun rung(plan: Plan, st: State, g: Group): Int = plan.rung(ignores(plan, st, g))
+    private fun names(plan: Plan, st: State, gs: List<Group>): String =
+        gs.flatMap { nagged(plan, st, it) }.map { it.name }.distinct().joinToString(", ")
 
-    /**
-     * [g]'s mascot line, by the rule the nag screen shares (`src/app/plan.ts` nagLineIndex): its first open dose's
-     * seed plus its ignores, on its rung. Under decision A each nag ends in at most one ignore, so the ignores number
-     * its nags; both sides hold them, so the notification, the bubble and the nag screen never disagree.
-     */
-    fun line(plan: Plan, st: State, g: Group): String =
-        plan.line(rung(plan, st, g), open(plan, st, g).firstOrNull()?.lineSeed ?: 0, ignores(plan, st, g))
+    /** A text of the plan with its `{names}` and `{time}` filled. */
+    fun fill(template: String, names: String, at: Long?, zone: ZoneId = ZoneId.systemDefault()): String =
+        template.replace("{names}", names).replace("{time}", at?.let { WallClock.hhmm(it, zone) } ?: "")
 
-    private fun event(st: State, key: String, kind: String, reason: String?, at: Long) = Event(++st.event, key, kind, reason, at)
+    private fun event(st: State, key: String, kind: String, reason: String?, at: Long, step: Step?) = Event(++st.event, key, kind, reason, at, step)
 
-    /**
-     * [g]'s state brought to its doses: `done` with none open; `promised` while every open dose is under a promise, to
-     * the earliest deadline; otherwise its ladder goes on for the doses under none. A dose under no promise that joins
-     * a promised group (a new medication at that time, an undo) nags from the group's time, at once when it is past.
-     */
-    private fun settle(plan: Plan, st: State, g: Group) {
-        val open = open(plan, st, g)
-        if (open.isEmpty()) { g.state = "done"; return }
-        if (g.state == "done") g.state = "upcoming"
-        val deadlines = open.map { until(st, it) }
-        if (deadlines.all { it != null }) {
-            g.state = "promised"; g.until = deadlines.minOf { it!! }; g.nextAt = null
-        } else if (g.state == "promised") {
-            g.state = "upcoming"; g.until = null
+    // MARK: the thread
+
+    /** [g]'s alarm: the earliest choice among its doses under no promise ("Já na hora" before "Só se passar de tudo"),
+     * its open ones while every one is promised. */
+    fun alarm(plan: Plan, st: State, g: Group): Alarm {
+        val ds = nagged(plan, st, g).ifEmpty { open(plan, st, g) }
+        return when {
+            ds.any { it.alarm == Alarm.ON_TIME } -> Alarm.ON_TIME
+            ds.any { it.alarm == Alarm.AFTER_ALL } -> Alarm.AFTER_ALL
+            else -> Alarm.OFF
         }
     }
 
-    /** A state written before promises were per dose (version 1): a promised group's deadline becomes each of its open
-     * doses' promise. */
-    fun upgrade(plan: Plan, st: State) {
-        if (st.v >= State.VERSION) return
-        for (g in st.groups.values) {
-            val u = g.until
-            if (g.state == "promised" && u != null) for (d in open(plan, st, g)) st.doses[d.key]?.until = u
+    /**
+     * The step after [step] ([repeats] of them fired) on [g]'s thread: the dose time's notification, De novo, Tela cheia
+     * when on, the alarm when its doses chose "Só se passar de tudo", then the plan's repeats (0 to 3); null with none
+     * left. A step that's off takes no place.
+     */
+    fun after(plan: Plan, st: State, g: Group, step: Step?, repeats: Int): Step? {
+        val repeat = if (repeats < plan.ladder.repeats) Step.REPEAT else null
+        val afterFull = if (alarm(plan, st, g) == Alarm.AFTER_ALL) Step.ALARM else repeat
+        return when (step) {
+            null -> Step.NOTIFY
+            Step.NOTIFY -> Step.AGAIN
+            Step.AGAIN -> if (plan.steps.fullScreen) Step.FULL else afterFull
+            Step.FULL -> afterFull
+            Step.ALARM, Step.REPEAT, Step.DEADLINE -> repeat
         }
-        st.v = State.VERSION
     }
 
-    /** The promises of [g] whose deadline came: those doses are nagged again, at the rung they had. */
-    private fun release(plan: Plan, st: State, g: Group, now: Long) {
-        for (d in open(plan, st, g)) st.doses[d.key]?.let { if ((it.until ?: Long.MAX_VALUE) <= now) it.until = null }
+    /** The gap before [s] from the step before it ([repeats] repeats fired): her pace. */
+    fun gap(plan: Plan, s: Step, repeats: Int): Long = 60_000L * when (s) {
+        Step.AGAIN -> plan.ladder.firstMin
+        Step.FULL, Step.ALARM -> plan.ladder.thenMin
+        Step.REPEAT -> if (repeats == 0) plan.ladder.repeatFirstMin else plan.ladder.repeatEveryMin
+        Step.NOTIFY, Step.DEADLINE -> 0
+    }
+
+    /**
+     * [g]'s next step and when it is due: the dose time's notification at its time, then each step one gap after the
+     * step before it that happened, or after her "Agora não" when that is later ([Group.nextAt]). Null with no step
+     * left, or nothing to remind now (done, every open dose promised, muted).
+     */
+    fun upcoming(plan: Plan, st: State, g: Group, zone: ZoneId = ZoneId.systemDefault()): Pair<Step, Long>? {
+        if (g.state == "done" || g.state == "promised" || g.muted || nagged(plan, st, g).isEmpty()) return null
+        val s = after(plan, st, g, g.step, g.repeats) ?: return null
+        val at = if (g.step == null) WallClock.epoch(g.group, zone) else g.nextAt ?: g.lastFiredAt ?: WallClock.epoch(g.group, zone)
+        return s to at
+    }
+
+    /** Whether [s] is the step that rings [g]'s alarm, given its alarm choice. */
+    private fun ringing(s: Step, mode: Alarm): Boolean = s == Step.ALARM || (s == Step.NOTIFY && mode == Alarm.ON_TIME)
+
+    /**
+     * When [g]'s alarm rings (`setAlarmClock`, code 1): at the dose time for "Já na hora", before its notification;
+     * for "Só se passar de tudo", at the time it has if the steps before it come on time, from its next step's. So a
+     * step Android delays never delays it, and it moves later only when a step really fires late or "Agora não" moves
+     * the thread. Null with no alarm ahead, and without exact access, where the alarm step is a notification (item 14).
+     */
+    fun alarmAt(plan: Plan, st: State, g: Group, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Long? {
+        if (!exact) return null
+        val (next, at) = upcoming(plan, st, g, zone) ?: return null
+        val mode = alarm(plan, st, g)
+        if (mode == Alarm.OFF) return null
+        if (ringing(next, mode)) return at
+        if (mode != Alarm.AFTER_ALL) return null
+        var s = next
+        var t = at
+        while (s != Step.ALARM) {
+            val n = after(plan, st, g, s, g.repeats) ?: return null
+            if (n == Step.REPEAT) return null
+            t += gap(plan, n, g.repeats)
+            s = n
+        }
+        return t
     }
 
     /** The earliest promise deadline among [g]'s open doses, or null with none. */
     private fun deadline(plan: Plan, st: State, g: Group): Long? = open(plan, st, g).mapNotNull { until(st, it) }.minOrNull()
 
+    /** Whether the deadline of [g] due at [now] rings the alarm: one of its doses whose promise ends then chose "Já na
+     * hora" (with exact access). */
+    private fun deadlineRings(plan: Plan, st: State, g: Group, now: Long, exact: Boolean): Boolean =
+        exact && open(plan, st, g).any { d -> (until(st, d) ?: Long.MAX_VALUE) <= now && d.alarm == Alarm.ON_TIME }
+
+    // MARK: the plan and the state
+
+    /**
+     * [g]'s state brought to its doses: `done` with none open; `promised` while every open dose is under a promise, to
+     * the earliest deadline; otherwise its thread goes on for the doses under none. A dose under no promise that joins
+     * a promised group (a new medication at that time, an undo) is reminded at once when its step is past.
+     */
+    private fun settle(plan: Plan, st: State, g: Group) {
+        val open = open(plan, st, g)
+        if (open.isEmpty()) { g.state = "done"; return }
+        if (g.state == "done") g.state = if (g.step == null) "upcoming" else "pending"
+        val deadlines = open.map { until(st, it) }
+        if (deadlines.all { it != null }) {
+            g.state = "promised"; g.until = deadlines.minOf { it!! }; g.nextAt = null
+        } else if (g.state == "promised") {
+            g.state = if (g.step == null) "upcoming" else "pending"; g.until = null
+        }
+    }
+
+    /**
+     * A state written by an older engine. Version 1 (promises per group): a promised group's deadline becomes each of
+     * its open doses' promise. Version 2 (the ladder of ignores): a group that rang is put on the step its reminders
+     * reach (one per nag, under decision A at most one ignore each), its doses have had their full screen (the old
+     * ladder showed one at every loud nag), a ring in progress is over, and a swiped notification or a closed bubble
+     * stays away for that step.
+     */
+    fun upgrade(plan: Plan, st: State) {
+        if (st.v >= State.VERSION) return
+        if (st.v < 2) for (g in st.groups.values) {
+            val u = g.until
+            if (g.state == "promised" && u != null) for (d in open(plan, st, g)) st.doses[d.key]?.until = u
+        }
+        for (g in st.groups.values) {
+            if (g.nag == 0 || g.state == "upcoming" || g.lastFiredAt == null) continue
+            val nags = maxOf(1, g.ignores + if (g.ignoredNag >= g.nag) 0 else 1)
+            var s: Step? = null
+            var repeats = 0
+            for (i in 0 until nags) {
+                val n = after(plan, st, g, s, repeats) ?: break
+                if (n == Step.REPEAT) repeats++
+                s = n
+            }
+            g.step = s; g.last = s; g.repeats = repeats; g.fires = nags
+            if (g.state == "ringing") g.state = "pending"
+            if (g.state == "pending" && g.nextAt == null) {
+                after(plan, st, g, s, repeats)?.let { n -> g.nextAt = g.lastFiredAt!! + gap(plan, n, repeats) }
+            }
+            for (d in open(plan, st, g)) st.doses[d.key]?.full = true
+            g.dismissed = st.swiped != 0 && st.swiped == g.nag
+            g.nested = st.bubbleClosed != 0 && st.bubbleClosed == g.nag
+            g.unlocked = true
+        }
+        st.v = State.VERSION
+    }
+
+    /** The promises of [g] whose deadline came: those doses are reminded again, on the thread. Returns them. */
+    private fun release(plan: Plan, st: State, g: Group, now: Long): List<Dose> = open(plan, st, g).filter { d ->
+        st.doses[d.key]?.let { s -> (s.until ?: Long.MAX_VALUE) <= now && run { s.until = null; true } } == true
+    }
+
     /**
      * A new plan merged into the state. A dose the plan names is open, but one resolved after the plan was made stays
      * resolved (the plan is older than the resolution); a dose or group the plan no longer names is dropped, so removing
-     * a medication drops its open dose. A group keeps its place on the ladder; a promise the plan carries (restored from
-     * the app's records) is taken by a dose that has none.
+     * a medication drops its open dose. A group keeps its place on its thread, so a new pace applies from the step after
+     * the next one, which is already set; a promise the plan carries (restored from the app's records) is taken by a
+     * dose that has none.
      */
     fun merge(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
         val keys = plan.doses.map { it.key }.toSet()
@@ -106,7 +244,7 @@ internal object Rules {
     /**
      * The state lost (its file unreadable) but not the plan: the doses still more than [EARLY_MS] ahead go on, since
      * none of them could have been confirmed yet. The ones before are left out, as she may have taken them, until the
-     * app's next plan, which a lost state always merges (its hash is unknown). The ladder of those ahead starts anew.
+     * app's next plan, which a lost state always merges (its hash is unknown). The threads of those ahead start anew.
      */
     fun recover(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
         val ahead = plan.doses.filter { WallClock.epoch(it.group, zone) > now + EARLY_MS }
@@ -120,145 +258,247 @@ internal object Rules {
             val s = st.doses[d.key] ?: continue
             if (s.state != "open" || plan.miss(d, zone) > now) continue
             s.state = "lapsed"; s.at = now; s.until = null
-            out += event(st, d.key, "lapsed", null, now)
+            out += event(st, d.key, "lapsed", null, now, st.groups[d.group]?.last)
         }
         for (g in st.groups.values) if (g.state != "done") settle(plan, st, g)
     }
 
-    /** The groups due a loud nag now: at their time, at their next nag, or at a promise's deadline of theirs. */
-    fun due(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()): List<Group> = st.groups.values.filter { g ->
-        open(plan, st, g).isNotEmpty() && (when (g.state) {
-            "upcoming" -> WallClock.epoch(g.group, zone) <= now
-            "pending", "ringing" -> g.nextAt?.let { it <= now } ?: false
-            "promised" -> (g.until ?: 0) <= now
-            else -> false
-        } || (g.state != "done" && (deadline(plan, st, g) ?: Long.MAX_VALUE) <= now))
-    }
+    // MARK: firing
 
-    /** A loud nag for [groups], one number for all of them, for their doses under no promise (a promise whose deadline
-     * came is over). Each rings until its ring's end ([ringOut]); the next nag is set as if it rang out unanswered, a
-     * fallback should nothing end the ring. */
-    fun fire(plan: Plan, st: State, groups: List<Group>, now: Long, out: MutableList<Event>): Int {
-        if (groups.isEmpty()) return st.nag
-        val nag = ++st.nag
-        for (g in groups) {
-            release(plan, st, g, now)
-            if (nagged(plan, st, g).isEmpty()) { settle(plan, st, g); continue }
-            g.state = "ringing"; g.nag = nag; g.lastFiredAt = now; g.until = null
-            g.nextAt = now + plan.ladder.ringSec * 1000L + plan.interval(ignores(plan, st, g) + 1)
-            for (d in nagged(plan, st, g)) out += event(st, d.key, "fired", null, now)
+    /** A group due now, and the step it fires. */
+    class Due(val group: Group, val step: Step)
+
+    /**
+     * The groups due a reminder at [now], each with its step: the alarm when its time came (and the steps it passed are
+     * skipped), else its next step when due (without exact access the alarm step comes as a notification), else a
+     * promise's deadline. With [alarms] false (the inexact backup's wake while exact access holds) an alarm is left to
+     * its own alarm clock, which alone may start the ring from the background.
+     */
+    fun due(plan: Plan, st: State, now: Long, exact: Boolean, alarms: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<Due> =
+        st.groups.values.mapNotNull { g ->
+            if (g.state == "done" || g.muted || open(plan, st, g).isEmpty()) return@mapNotNull null
+            val deadline = deadline(plan, st, g)?.takeIf { it <= now }
+            val up = upcoming(plan, st, g, zone)
+            val ring = alarmAt(plan, st, g, exact, zone)?.takeIf { it <= now }
+            val due = when {
+                ring != null -> if (up?.first == Step.NOTIFY) Step.NOTIFY else Step.ALARM
+                up != null && up.second <= now -> up.first
+                deadline != null -> Step.DEADLINE
+                else -> null
+            } ?: return@mapNotNull null
+            val rings = ring != null || (due == Step.DEADLINE && deadlineRings(plan, st, g, now, exact))
+            if (rings && !alarms) null else Due(g, due)
         }
-        st.swiped = 0
-        return nag
+
+    /** What one group's fire was: its step, whether it brings the full screen, and whether it rings the alarm. */
+    class Fire(val group: Group, val step: Step, val fullScreen: Boolean, val rings: Boolean)
+
+    /**
+     * One post for [dues], one number for all of them, for their doses under no promise (a promise whose deadline came is
+     * over). Each group moves to its step, counts one more reminder (a promised dose sits it out), and sets its next one
+     * gap after now. The full screen comes once per dose; the alarm rings only with exact access. Returns the fires, the
+     * post's number being [State.nag].
+     */
+    fun fire(plan: Plan, st: State, dues: List<Due>, now: Long, out: MutableList<Event>, exact: Boolean): List<Fire> {
+        if (dues.isEmpty()) return emptyList()
+        val nag = st.nag + 1
+        val fires = ArrayList<Fire>()
+        for (due in dues) {
+            val g = due.group
+            val rings = exact && when (due.step) {
+                Step.ALARM -> true
+                Step.NOTIFY -> alarm(plan, st, g) == Alarm.ON_TIME
+                Step.DEADLINE -> deadlineRings(plan, st, g, now, true)
+                else -> false
+            }
+            release(plan, st, g, now)
+            val nagged = nagged(plan, st, g)
+            if (nagged.isEmpty()) { settle(plan, st, g); continue }
+            when (due.step) {
+                Step.DEADLINE -> if (g.step == null) g.step = Step.NOTIFY
+                Step.REPEAT -> { g.step = Step.REPEAT; g.repeats++ }
+                else -> g.step = due.step
+            }
+            g.last = due.step
+            val full = due.step == Step.FULL && nagged.any { st.doses[it.key]?.full != true }
+            if (due.step == Step.FULL) { for (d in nagged) st.doses[d.key]?.full = true; g.unlocked = false }
+            g.fires++
+            for (d in open(plan, st, g)) st.doses[d.key]?.let { if (it.until != null) it.behind++ }
+            g.state = if (rings) "ringing" else "pending"
+            g.nag = nag; g.lastFiredAt = now; g.until = null
+            g.dismissed = false; g.nested = false; g.muted = false
+            // The next step one gap after this one; a deadline never brings the others' next step sooner than it was.
+            val next = after(plan, st, g, g.step, g.repeats)?.let { now + gap(plan, it, g.repeats) }
+            g.nextAt = if (due.step == Step.DEADLINE && next != null) maxOf(next, g.nextAt ?: 0) else next
+            for (d in nagged) out += event(st, d.key, "fired", null, now, due.step)
+            fires += Fire(g, due.step, full, rings)
+        }
+        if (fires.isNotEmpty()) { st.nag = nag; st.confirm = 0; st.confirmUntil = 0 }
+        return fires
     }
 
-    /** No ring can be stopped (notifications off): the groups wait silently, with no next nag, until notifications are
-     * back ([unmute]) or they lapse. A promise whose deadline came is over: its dose waits with them. Returns the groups
-     * it silenced (those with a dose left to nag). */
-    fun mute(plan: Plan, st: State, groups: List<Group>, now: Long): List<Group> {
+    /** No notification can reach her (notifications off): the groups due wait, silently, until they are back
+     * ([unmute]) or they lapse; a step that never reached her counts nothing. A promise whose deadline came is over: its
+     * dose waits with them. Returns the groups it silenced (those with a dose left to remind). */
+    fun mute(plan: Plan, st: State, dues: List<Due>, now: Long): List<Group> {
         val muted = ArrayList<Group>()
-        for (g in groups) {
+        for (due in dues) {
+            val g = due.group
             release(plan, st, g, now)
-            if (nagged(plan, st, g).isEmpty()) { settle(plan, st, g); continue }
-            g.state = "pending"; g.nextAt = null; g.until = null
+            settle(plan, st, g)
+            if (nagged(plan, st, g).isEmpty()) continue
+            g.muted = true
+            if (g.state == "upcoming") g.state = "pending"
             muted += g
         }
         return muted
     }
 
     /**
-     * Item 20: groups [mute] silenced while the app is in front still come up there, as a nag of their own number that
-     * the app opens without a ring (`nagState().front`). It rang nothing, so nothing can ignore it: no rung climbs, as
-     * for any nag the phone never rang, and its groups wait with no next nag, as muted. Its number comes from the
-     * nags' own count, so each loud nag after it is still a new notification. Returns it, or 0 with no group.
+     * Item 20: groups [mute] silenced while the app is in front still come up there, as a post of their own number that
+     * the app opens without a sound (`nagState().front`). Nothing reached her, so nothing counts, and its "Agora não"
+     * moves nothing. Its number comes from the posts' own count, so each post after it is still a new notification.
+     * Returns it, or 0 with no group.
      */
     fun silent(st: State, groups: List<Group>): Int {
         if (groups.isEmpty()) return 0
         val nag = ++st.nag
-        for (g in groups) { g.nag = nag; g.ignoredNag = nag }
+        for (g in groups) g.nag = nag
         return nag
     }
 
-    /** Notifications are back: every group [mute] silenced nags at once. */
-    fun unmute(plan: Plan, st: State, now: Long) {
-        for (g in st.groups.values) if (g.state == "pending" && g.nextAt == null && nagged(plan, st, g).isNotEmpty()) g.nextAt = now
+    /** Notifications are back: every group [mute] silenced is reminded at once (its step's time is past), or at its
+     * deadline when she promised meanwhile. */
+    fun unmute(st: State) {
+        for (g in st.groups.values) g.muted = false
     }
 
-    /** When [g]'s ring ends unanswered: its fire plus the ladder's ring time. */
-    fun ringEnd(plan: Plan, g: Group): Long? = g.lastFiredAt?.let { it + plan.ladder.ringSec * 1000L }
+    /** When [g]'s alarm stops by itself, ringing: its cap after it began. */
+    fun ringEnd(g: Group): Long? = g.lastFiredAt?.takeIf { g.state == "ringing" }?.let { it + RING_MS }
 
-    /**
-     * Every group still ringing at its ring's end ends unanswered: the nag's one ignore (`timeout`), at that end, as the
-     * app's ladder counts it. The service's timer ends a ring it plays, and the alarm, set at the ring's end, ends one
-     * nothing played: a start the system refused, a process that died mid-ring. A group of the same nag that was
-     * opened meanwhile stopped ringing, and counts nothing here.
-     */
-    fun ringOut(plan: Plan, st: State, now: Long, out: MutableList<Event>) {
+    /** Every alarm still ringing at its cap rings out (`timeout`, at that end): it stops; the next step was set at its
+     * fire and doesn't move. Whether one did. */
+    fun ringOut(plan: Plan, st: State, now: Long, out: MutableList<Event>): Boolean {
+        var any = false
         for (g in st.groups.values) {
-            if (g.state != "ringing") continue
-            val end = ringEnd(plan, g) ?: continue
-            if (end <= now) ignored(plan, st, g, "timeout", end, out)
+            val end = ringEnd(g) ?: continue
+            if (end > now) continue
+            g.state = "pending"; any = true
+            for (d in nagged(plan, st, g)) out += event(st, d.key, "ignored", "timeout", end, g.last)
         }
-    }
-
-    /**
-     * Nag [nag] ignored by [reason]: once per nag, whatever ignores it after the first. Each of its groups climbs one
-     * rung, and its next loud nag is counted from now.
-     */
-    fun ignore(plan: Plan, st: State, nag: Int, reason: String, now: Long, out: MutableList<Event>): Boolean {
-        var any = false
-        for (g in st.groups.values) if (g.nag == nag && ignored(plan, st, g, reason, now, out)) any = true
         return any
     }
 
-    /**
-     * The nags of [keys]' groups ignored by [reason]: the nag screen's "Not now", which shows one group, as the app's
-     * `ignoreDose(group)` counts it. Each group's nag takes one ignore, whatever ignored it first; another group the
-     * same nag rang for is left as it is.
-     */
-    fun ignore(plan: Plan, st: State, keys: Collection<String>, reason: String, now: Long, out: MutableList<Event>): Boolean {
+    /** The alarm silenced by her ("Parar", the unlock, the power key, a touch or a volume key on the nag screen, its
+     * notification swiped or opened): it stops, and nothing else moves. Whether one rang. */
+    fun silence(st: State): Boolean {
         var any = false
-        for (g in groupsOf(plan, st, keys)) if (ignored(plan, st, g, reason, now, out)) any = true
+        for (g in st.groups.values) if (g.state == "ringing") { g.state = "pending"; any = true }
         return any
     }
 
+    // MARK: her answers
+
+    /** What "Agora não" says it brings next: `remind` or `alarm` at [at], or `wait` (nothing before the dose is
+     * missed, [at] null). */
+    class Answer(val kind: String, val at: Long?)
+
     /**
-     * [g]'s nag ignored at [at], unless it was already: its doses under no promise climb one rung, and its next loud nag
-     * is counted from [at]. A promised dose sat it out: it keeps its rung (the app's ladder counts nothing during a
-     * promise).
+     * What "Agora não" tapped at [now] would say for [g]: its next step moved to one gap after the tap, never sooner
+     * than it was due; `wait` when no step is left, or the moved one would come at or past the moment its doses are
+     * missed. The alarm only with exact access.
      */
-    private fun ignored(plan: Plan, st: State, g: Group, reason: String, at: Long, out: MutableList<Event>): Boolean {
-        if (g.nag == 0 || g.ignoredNag >= g.nag || (g.state != "ringing" && g.state != "pending")) return false
-        g.ignores++; g.ignoredNag = g.nag; g.state = "pending"
-        for (d in open(plan, st, g)) st.doses[d.key]?.let { if (it.until != null) it.behind++ }
-        g.nextAt = at + plan.interval(ignores(plan, st, g))
-        for (d in nagged(plan, st, g)) out += event(st, d.key, "ignored", reason, at)
-        return true
+    fun answer(plan: Plan, st: State, g: Group, now: Long, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Answer {
+        val (next, due) = upcoming(plan, st, g, zone) ?: return Answer("wait", null)
+        val at = if (g.step == null) due else maxOf(due, now + gap(plan, next, g.repeats))
+        val miss = nagged(plan, st, g).maxOfOrNull { plan.miss(it, zone) } ?: return Answer("wait", null)
+        if (at >= miss) return Answer("wait", null)
+        return Answer(if (exact && next == Step.ALARM) "alarm" else "remind", at)
     }
 
-    /** The nag screen opened on [keys]: their ring stops, and nothing climbs; the next nag counts from the opening, as
-     * the app's ladder does (`nagAfterOpen`). A nag of theirs that rang in front has been shown ([front]). */
+    /**
+     * "Agora não" for [groups] at [now] (the nag screen's, or the notification's): each one's next step moves to one gap
+     * after the tap, never sooner than it was due; it never skips, adds or changes a step, and a second tap moves it
+     * again by the same rule. The reminder then stays away until the next step, as after a swipe: its post, its bubble,
+     * the opening at the unlock and the app's front. Logged `notNow`, counting nothing. Groups silenced with notifications off move
+     * nothing: nothing could reach her again.
+     */
+    fun notNow(plan: Plan, st: State, groups: Collection<Group>, now: Long, out: MutableList<Event>, zone: ZoneId = ZoneId.systemDefault()): Boolean {
+        var any = false
+        for (g in groups) {
+            if (g.muted || g.step == null || g.state == "done" || g.state == "promised") continue
+            val nagged = nagged(plan, st, g)
+            if (nagged.isEmpty()) continue
+            upcoming(plan, st, g, zone)?.let { (next, due) -> g.nextAt = maxOf(due, now + gap(plan, next, g.repeats)) }
+            if (g.state == "ringing") g.state = "pending"
+            g.dismissed = true; g.nested = true; g.unlocked = true
+            if (st.front != 0 && g.nag == st.front) st.front = 0
+            for (d in nagged) out += event(st, d.key, "ignored", "notNow", now, g.last)
+            any = true
+        }
+        return any
+    }
+
+    /** The groups the reminder notification shows now: those whose step fired, under no promise, not dismissed. */
+    fun shown(plan: Plan, st: State): List<Group> = st.groups.values
+        .filter { (it.state == "pending" || it.state == "ringing") && it.lastFiredAt != null && !it.dismissed && !it.muted && nagged(plan, st, it).isNotEmpty() }
+        .sortedBy { it.group }
+
+    /** The post the reminder notification shows: the latest number among [shown], 0 with none. */
+    fun live(plan: Plan, st: State): Int = shown(plan, st).maxOfOrNull { it.nag } ?: 0
+
+    /** The groups of post [nag] while it is the one showing: what its "Agora não" or its swipe answers. */
+    fun of(plan: Plan, st: State, nag: Int): List<Group> = if (nag == 0 || nag != live(plan, st)) emptyList() else shown(plan, st)
+
+    /**
+     * Post [nag] swiped away (its delete intent): every group it showed stays away until its next step, through a
+     * refresh, a plan, a receiver or another group's fire, and the app's front ends; nothing is counted. An alarm ringing
+     * in it stops (her swipe on its notification, once unlocked). A post that no longer shows changes nothing.
+     */
+    fun dismissed(plan: Plan, st: State, nag: Int): Boolean {
+        val gs = of(plan, st, nag)
+        for (g in gs) {
+            g.dismissed = true
+            if (g.state == "ringing") g.state = "pending"
+            if (st.front != 0 && g.nag == st.front) st.front = 0
+        }
+        return gs.isNotEmpty()
+    }
+
+    /** The bubble sent to the nest in post [nag]: it stays away for the step of every group inside De novo, across a
+     * process death; it logs nothing. */
+    fun nested(plan: Plan, st: State, nag: Int) {
+        for (g in st.groups.values) if (g.last == Step.AGAIN && (g.nag == nag || nag == 0)) g.nested = true
+    }
+
+    /** The nag screen opened on [keys]: an alarm ringing for them stops, the opening at the unlock is done, and nothing
+     * else moves: the next step comes at its time. A post of theirs that fired in front has been shown ([front]). */
     fun opened(plan: Plan, st: State, keys: Collection<String>, now: Long, out: MutableList<Event>) {
         for (g in groupsOf(plan, st, keys)) {
-            if (g.state == "ringing") { g.state = "pending"; g.nextAt = now + plan.interval(ignores(plan, st, g) + 1) }
-            for (d in nagged(plan, st, g)) if (d.key in keys) out += event(st, d.key, "opened", null, now)
+            if (g.state == "ringing") g.state = "pending"
+            g.unlocked = true
+            for (d in nagged(plan, st, g)) if (d.key in keys) out += event(st, d.key, "opened", null, now, g.last)
             if (st.front != 0 && g.nag == st.front) st.front = 0
         }
     }
 
     /**
-     * Decision 7: the lead group (the earliest) of the nag that rang with the app in front and the nag screen has not
-     * shown yet, which the app reads (`nagState().front`); null once shown, answered, promised or missed, or after a loud
-     * nag in the background.
+     * Decision 7 and item 17: the lead group (the earliest) of the post that fired with the app in front and the nag
+     * screen has not shown yet, which the app reads (`nagState().front`, with [frontStep]); null once shown, answered,
+     * promised or missed, or after a post in the background.
      */
     fun front(plan: Plan, st: State): Group? = if (st.front == 0) null else st.groups.values
         .filter { it.nag == st.front && (it.state == "ringing" || it.state == "pending") && nagged(plan, st, it).isNotEmpty() }
         .minByOrNull { it.group }
 
+    /** The step [front]'s post came with: its fire's; for one silenced with notifications off, the step that came due. */
+    fun frontStep(plan: Plan, st: State, g: Group, zone: ZoneId = ZoneId.systemDefault()): Step? =
+        if (st.front != 0 && st.front == st.silent) after(plan, st, g, g.step, g.repeats) ?: g.last else g.last
+
     /**
      * [keys] resolved in the app: `taken` or `skipped` closes them; `promised` holds each of them, and only them, until
      * [until], capped at the moment that dose is missed; the last promise counts. Their groups follow: done with nothing
-     * open, promised once every open dose is, and otherwise still nagging the doses under no promise.
+     * open, promised once every open dose is, and otherwise still reminding the doses under no promise.
      */
     fun resolve(plan: Plan, st: State, keys: Collection<String>, kind: String, until: Long?, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
         if (kind == "promised") {
@@ -270,11 +510,16 @@ internal object Rules {
         } else {
             for (k in keys) st.doses[k]?.takeIf { it.state == "open" }?.let { it.state = "resolved"; it.at = now; it.until = null }
         }
-        for (g in groupsOf(plan, st, keys)) if (g.state != "done") settle(plan, st, g)
+        for (g in groupsOf(plan, st, keys)) if (g.state != "done") {
+            settle(plan, st, g)
+            if (g.state == "promised" && g.last == Step.FULL) g.unlocked = true
+        }
     }
 
-    private fun groupsOf(plan: Plan, st: State, keys: Collection<String>): List<Group> =
+    fun groupsOf(plan: Plan, st: State, keys: Collection<String>): List<Group> =
         plan.doses.filter { it.key in keys }.map { it.group }.distinct().mapNotNull { st.groups[it] }
+
+    // MARK: what shows
 
     /** The stale notice's time, the plan's days after the app last sent one, or null once shown for that plan. A plan
      * whose idle days are 0 has no stale notice: no medication left whose reminders could run out. */
@@ -282,30 +527,129 @@ internal object Rules {
         if (st.planAt == 0L || st.staleShown == st.planAt || plan.idle.afterDays == 0) null
         else st.planAt + plan.idle.afterDays * 24L * 60 * 60_000
 
-    /** The one alarm to set: the earliest of every group's time, ring's end and next nag, every open dose's promise
-     * deadline and lapse, and the stale notice. A time already past fires at once. */
-    fun next(plan: Plan, st: State, zone: ZoneId = ZoneId.systemDefault()): Long? {
-        val times = ArrayList<Long>()
-        for (g in st.groups.values) {
-            if (open(plan, st, g).isEmpty()) continue
-            when (g.state) {
-                "upcoming" -> times += WallClock.epoch(g.group, zone)
-                "ringing" -> (ringEnd(plan, g) ?: g.nextAt)?.let { times += it }
-                "pending" -> g.nextAt?.let { times += it }
-                "promised" -> g.until?.let { times += it }
-            }
-        }
-        for (d in plan.doses) st.doses[d.key]?.takeIf { it.state == "open" }?.let { s ->
-            times += plan.miss(d, zone)
-            if (st.groups[d.group].let { it != null && it.state != "done" }) s.until?.let { times += it }
-        }
-        stale(plan, st)?.let { times += it }
-        return times.minOrNull()
+    /** When the bubble of [g] leaves by itself: at its next step, or one gap after it came when none follows. Null
+     * when it isn't showing for [g] (not inside De novo, Bolinha off, sent to the nest, nothing to remind). */
+    fun bubbleEnd(plan: Plan, st: State, g: Group, zone: ZoneId = ZoneId.systemDefault()): Long? {
+        if (!plan.steps.bubble || g.last != Step.AGAIN || g.nested || g.muted || (g.state != "pending" && g.state != "ringing")) return null
+        if (nagged(plan, st, g).isEmpty()) return null
+        val fired = g.lastFiredAt ?: return null
+        return upcoming(plan, st, g, zone)?.second ?: (fired + gap(plan, Step.FULL, g.repeats))
     }
 
-    /** Each planned dose's state as the app reads it (`nagState`): a dose under a promise is `promised` to its own
-     * deadline, while the others of its group show the group's ladder; its ignores and rung are its own. */
-    fun doses(plan: Plan, st: State): List<org.json.JSONObject> = plan.doses.map { d ->
+    /** Until when the nag screen opens at her first unlock for [g] ("Abrir quando eu desbloquear"): from its full
+     * screen until its next step, at most [UNLOCK_MS]; null when not waiting. */
+    fun unlockEnd(plan: Plan, st: State, g: Group, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Long? {
+        if (!plan.steps.unlock || g.last != Step.FULL || g.unlocked || g.muted || (g.state != "pending" && g.state != "ringing")) return null
+        if (nagged(plan, st, g).isEmpty()) return null
+        val fired = g.lastFiredAt ?: return null
+        return listOfNotNull(upcoming(plan, st, g, zone)?.second, alarmAt(plan, st, g, exact, zone), fired + UNLOCK_MS).min()
+    }
+
+    /** The two alarms to set: code 0 at [step] (every step, repeat, deadline, lapse, the ring's cap, the bubble's and
+     * the unlock's ends, and the stale notice), code 1 at [alarm] (the next alarm step, with exact access only). */
+    class Arm(val step: Long?, val alarm: Long?)
+
+    /**
+     * The alarms to set after [now]: the earliest of every event but the alarm's, and the earliest alarm separately, so
+     * a deferred code-0 alarm never delays it ([alarmAt]). Without exact access the alarm steps are notification steps
+     * among the others. A time already past fires at once; an end that already passed (the bubble's, the unlock's)
+     * isn't one.
+     */
+    fun next(plan: Plan, st: State, now: Long, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Arm {
+        val steps = ArrayList<Long>()
+        val alarms = ArrayList<Long>()
+        for (g in st.groups.values) {
+            // A group silenced with notifications off waits for them, its deadlines too: only its lapse wakes it.
+            if (g.state == "done" || g.muted || open(plan, st, g).isEmpty()) continue
+            ringEnd(g)?.let { steps += it }
+            for (d in open(plan, st, g)) {
+                val u = until(st, d) ?: continue
+                if (exact && d.alarm == Alarm.ON_TIME) alarms += u else steps += u
+            }
+            val up = upcoming(plan, st, g, zone)
+            val ring = alarmAt(plan, st, g, exact, zone)
+            ring?.let { alarms += it }
+            if (up != null && (ring == null || !ringing(up.first, alarm(plan, st, g)))) steps += up.second
+            bubbleEnd(plan, st, g, zone)?.takeIf { it > now }?.let { steps += it }
+            unlockEnd(plan, st, g, exact, zone)?.takeIf { it > now }?.let { steps += it }
+        }
+        for (d in plan.doses) st.doses[d.key]?.takeIf { it.state == "open" }?.let { steps += plan.miss(d, zone) }
+        stale(plan, st)?.let { steps += it }
+        return Arm(steps.minOrNull(), alarms.minOrNull())
+    }
+
+    /**
+     * The post for [fires] (their number [nag]): the earliest firing group's step, channel (its first dose's sound),
+     * face and line; every open dose not under a promise and not dismissed named; the full screen when a firing group
+     * brings it; the alarm while one rings, any step with it folded in, silent; her sound otherwise, but in [front]
+     * (the app plays it) and for the full screen (silent over the lock screen).
+     */
+    fun post(plan: Plan, st: State, nag: Int, fires: List<Fire>, front: Boolean, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post {
+        val lead = fires.minBy { it.group.group }
+        val rings = st.groups.values.any { it.state == "ringing" && nagged(plan, st, it).isNotEmpty() }
+        val sounds = fires.any { f -> !f.rings && (f.step != Step.FULL || !f.fullScreen) }
+        return view(plan, st, nag, lead.group, lead.step, fires.map { it.group.group }.sorted(), now, zone).copy(
+            sounding = sounds && !rings && !front, fullScreen = fires.any { it.fullScreen } && !front, front = front,
+            title = fill(plan.texts.title, names(plan, st, shown(plan, st)), WallClock.epoch(lead.group.group, zone), zone),
+        )
+    }
+
+    /**
+     * What the reminder notification shows between steps (a silent refresh in place): the post showing ([live]) with
+     * the waiting title, the names and line as they are now, the alarm while it rings; null with nothing to show (no
+     * step fired, all answered, promised or dismissed).
+     */
+    fun refresh(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post? {
+        val shown = shown(plan, st)
+        val nag = shown.maxOfOrNull { it.nag } ?: return null
+        val lead = shown.filter { it.nag == nag }.minBy { it.group }
+        val title = plan.texts.pending.ifEmpty { plan.texts.title }
+        return view(plan, st, nag, lead, lead.last ?: Step.NOTIFY, shown.filter { it.nag == nag }.map { it.group }, now, zone)
+            .copy(title = fill(title, names(plan, st, shown), WallClock.epoch(lead.group, zone), zone))
+    }
+
+    /** The bubble's post: the earliest group inside its De novo step with Bolinha on, not sent to the nest, before its
+     * end ([bubbleEnd]); null with none. */
+    fun bubble(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post? {
+        val g = st.groups.values.filter { g -> bubbleEnd(plan, st, g, zone)?.let { it > now } == true }.minByOrNull { it.group } ?: return null
+        return view(plan, st, g.nag, g, Step.AGAIN, listOf(g.group), now, zone)
+            .copy(title = fill(plan.texts.title, names(plan, st, listOf(g)), WallClock.epoch(g.group, zone), zone))
+    }
+
+    /** Until when the nag screen opens at her first unlock: the latest wait of the groups after their full screen;
+     * null with none. */
+    fun unlock(plan: Plan, st: State, now: Long, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Long? =
+        st.groups.values.mapNotNull { unlockEnd(plan, st, it, exact, zone)?.takeIf { e -> e > now } }.maxOrNull()
+
+    /** The alarm's post while one rings: its group's (the earliest ringing); null with none. */
+    fun ringing(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post? {
+        val g = st.groups.values.filter { it.state == "ringing" && nagged(plan, st, it).isNotEmpty() }.minByOrNull { it.group } ?: return null
+        return view(plan, st, g.nag, g, g.last ?: Step.ALARM, listOf(g.group), now, zone)
+            .copy(title = fill(plan.texts.title, names(plan, st, listOf(g)), WallClock.epoch(g.group, zone), zone))
+    }
+
+    /** The parts every post shares, for [lead] at [step]: what is named (every group [shown], but dismissed ones), the
+     * channel, the line and the face; the alarm and its folding while one rings; the bubble while it shows. */
+    private fun view(plan: Plan, st: State, nag: Int, lead: Group, step: Step, groups: List<String>, now: Long, zone: ZoneId): Post {
+        val shown = (shown(plan, st) + st.groups.values.filter { it.group in groups }).distinct()
+        val doses = plan.doses.filter { d -> shown.any { it.group == d.group } && st.doses[d.key]?.let { it.state == "open" && it.until == null } == true }
+        val rings = st.groups.values.any { it.state == "ringing" && nagged(plan, st, it).isNotEmpty() }
+        val bubble = st.groups.values.any { g -> bubbleEnd(plan, st, g, zone)?.let { it > now } == true }
+        return Post(nag, groups, step, doses.map { it.key }, doses.map { it.name }.distinct(),
+            nagged(plan, st, lead).firstOrNull()?.sound ?: Plan.DEFAULT_SOUND, sounding = false, fullScreen = false,
+            alarm = rings, bubble = bubble, folded = rings && step != Step.ALARM, front = st.quiet != 0 && st.quiet == nag,
+            title = plan.texts.title, line = line(plan, st, lead, zone), rung = rung(plan, st, lead))
+    }
+
+    // MARK: what the app reads
+
+    /**
+     * Each planned dose's state as the app reads it (`nagState`, `NagDoseState`): a dose under a promise is `promised`
+     * to its own deadline, while the others of its group show the group's thread. `step` is its group's last post's
+     * (a deadline's included), `fires` its own reminders (a promise sat out excluded), `rung` its last reminder's (the
+     * ones before it, up to 4), `nextAt` and `nextStep` what comes next, and `alarmAt` when the alarm rings.
+     */
+    fun doses(plan: Plan, st: State, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): List<JSONObject> = plan.doses.map { d ->
         val g = st.groups[d.group]
         val s = st.doses[d.key]
         val own = s?.state ?: "open"
@@ -316,9 +660,19 @@ internal object Rules {
             promise != null -> "promised"
             else -> g.state
         }
-        val ignores = g?.let { ownIgnores(st, it, d) } ?: 0
-        org.json.JSONObject().put("key", d.key).put("state", state).put("ignores", ignores).put("rung", plan.rung(ignores))
-            .put("nextAt", (if (state == "promised") promise ?: g?.until else g?.nextAt.takeIf { state == "pending" || state == "ringing" }) ?: org.json.JSONObject.NULL)
-            .put("lastFiredAt", g?.lastFiredAt ?: org.json.JSONObject.NULL)
+        val fires = g?.let { fires(st, it, d) } ?: 0
+        val live = own == "open" && promise == null && g != null
+        val up = if (live) upcoming(plan, st, g!!, zone) else null
+        val alarmAt = when {
+            promise != null -> promise.takeIf { exact && d.alarm == Alarm.ON_TIME }
+            live -> alarmAt(plan, st, g!!, exact, zone)
+            else -> null
+        }
+        JSONObject().put("key", d.key).put("state", state).put("step", g?.last?.let(::word) ?: JSONObject.NULL)
+            .put("fires", fires).put("rung", minOf(maxOf(fires - 1, 0), Plan.TOP))
+            .put("nextAt", (if (promise != null) promise else up?.second) ?: JSONObject.NULL)
+            .put("nextStep", (if (promise != null) word(Step.DEADLINE) else up?.first?.let(::word)) ?: JSONObject.NULL)
+            .put("alarmAt", alarmAt ?: JSONObject.NULL)
+            .put("lastFiredAt", g?.lastFiredAt ?: JSONObject.NULL)
     }
 }
