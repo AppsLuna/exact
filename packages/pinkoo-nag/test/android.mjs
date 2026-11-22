@@ -7,7 +7,9 @@
 // real launches, `uiautomator` and `adb` (android-drive.mjs). What needs a phone is checklist.md's.
 //
 // usage: bun packages/pinkoo-nag/test/android.mjs [--emulator <serial>] [--out <dir>] [--keep <dir>] [--only 1,12]
-//          [--fast]
+//          [--fast] [--abis <abis>]
+//   --abis       the fixture APK's ABIs, as `agent-android.mjs build --abis` takes them (default arm64-v8a); an
+//                x86_64 emulator, as on a CI runner, takes x86_64
 //   (ANDROID_HOME, an NDK of clang 18 or newer, and a JDK 17 or newer in JAVA_HOME; `--keep` builds in <dir> and
 //   leaves it, so a second run is warm)
 //   --only 1,12  drives only those steps of android-drive.mjs (1 runs steps 1 to 7, which build on each other);
@@ -27,7 +29,7 @@ import { androidPackageId } from '../../../scripts/app.mjs';
 
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const argv = process.argv.slice(2), flag = (f) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : null);
-const emulator = flag('--emulator'), out = flag('--out'), keep = flag('--keep');
+const emulator = flag('--emulator'), out = flag('--out'), keep = flag('--keep'), abis = flag('--abis');
 const only = (flag('--only') ?? flag('--steps'))?.split(',').map(Number).filter((n) => n > 0) ?? null;
 const fast = argv.includes('--fast');
 const run = (cmd, args, cwd, env = process.env, ok = false) => {
@@ -53,7 +55,7 @@ try {
   run('bun', ['install'], app);
   ensureShells(app);
   const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
-  const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
+  const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', ...(abis ? ['--abis', abis] : [])], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the fixture builds as an APK', built.status === 0, (built.stdout + built.stderr).slice(-3000));
 
   const build = apkBuildDir(app);
