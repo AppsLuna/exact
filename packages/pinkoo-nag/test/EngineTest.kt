@@ -418,6 +418,28 @@ internal class EngineTest : CoreCase() {
         assertNull(out.unlock)
     }
 
+    /** Once per dose: her unlock opened the nag route, so the wait is done for that step even when the route never says
+     * it shows the dose (the fixture's doesn't); the app's resume after it (a refresh) and a process death wait for
+     * nothing again, and nothing is logged. Found on the emulator (engine-device, 2026-11-22): the resume armed it again
+     * and her next unlock opened the route a second time. */
+    @Test fun theUnlockOpensOnceEvenWhenTheRouteSaysNothing() {
+        Engine.schedule(app, NagFixtures.plan(pill8, unlock = true), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:20"))
+        deliver(Chain.STEP)
+        assertEquals(Step.FULL, out.posts.last().step)
+        assertEquals(at("2026-11-18T21:05"), out.unlock)
+        val events = Store.events(app).size
+        Engine.unlocked(app, at("2026-11-18T20:40"))
+        assertNull(out.unlock)
+        Engine.restore(app, at("2026-11-18T20:41"), front = true)
+        assertNull("the resume after it waits for nothing", out.unlock)
+        Engine.restore(app, at("2026-11-18T20:42"))
+        assertNull("nor a process death", out.unlock)
+        assertEquals("nothing logged", events, Store.events(app).size)
+        deliver(Chain.STEP)
+        assertEquals("the next step comes at its time", Step.REPEAT, out.posts.last().step)
+    }
+
     /** With notifications off nothing can reach her: the step waits, silently, and counts nothing; once they are back,
      * the step comes at once. */
     @Test fun withNotificationsOffTheStepWaitsUntilTheyAreBack() {

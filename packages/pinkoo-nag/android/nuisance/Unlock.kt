@@ -36,13 +36,16 @@ internal object Unlock : Nuisance {
 
     /**
      * Wait for her unlock until [at] ([Out.waitUnlock]; null, a time past or no access: stop waiting), then open the
-     * route [open] gives (the live reminder's lead dose time) once. Idempotent: the core calls it at every refresh.
+     * route [open] gives (the live reminder's lead dose time) once, and tell [opened], so the core marks the wait done
+     * and no later refresh waits again for that step (the app's activity resuming is one). Idempotent: the core calls it
+     * at every refresh.
      */
-    fun wait(c: Context, at: Long?, now: Long, open: () -> Intent?) {
+    fun wait(c: Context, at: Long?, now: Long, opened: (Context) -> Unit = {}, open: () -> Intent?) {
         val ctx = c.applicationContext
         if (at == null || at <= now || !allowed(ctx)) return stop(ctx)
         val end = minOf(at, now + MAX_MS)
         opener = open
+        told = opened
         if (receiver != null && until == end) return
         app = ctx
         until = end
@@ -55,6 +58,7 @@ internal object Unlock : Nuisance {
                 val i = opener() ?: return
                 stop(ctx)
                 runCatching { ctx.startActivity(i) }.onFailure { android.util.Log.w("pinkoo.nag", "unlock: $it") }
+                runCatching { told(ctx) }.onFailure { android.util.Log.w("pinkoo.nag", "unlock: $it") }
             }
         }
         val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
@@ -65,6 +69,7 @@ internal object Unlock : Nuisance {
     }
 
     private var opener: () -> Intent? = { null }
+    private var told: (Context) -> Unit = {}
 
     /** No more waiting: the receiver gone, and the service let go of the process unless something else holds it. */
     fun stop(c: Context) {

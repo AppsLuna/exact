@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -67,6 +68,13 @@ internal class NuisanceTest : SurfaceCase() {
         val face = windows.first { it !is TextView }
         assertEquals(0, paramsOf(face).flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
         assertEquals("Tap here, it's time", face.contentDescription)
+        // Beside the face, on the screen: the face sits on the right, so the balloon's right edge (END gravity, its x
+        // from the right) is 6 dp left of the face. Found on the emulator: it sat off the left edge, never seen.
+        val width = app.resources.displayMetrics.widthPixels
+        val dp6 = (6 * app.resources.displayMetrics.density).toInt()
+        assertEquals(Gravity.END, p.gravity and Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK)
+        assertEquals("its right edge 6 dp left of the face", paramsOf(face).x - dp6, width - p.x)
+        assertTrue("on the screen", p.x in 0 until width && p.y == paramsOf(face).y + (8 * app.resources.displayMetrics.density).toInt())
         idle(Bubble.BALLOON_MS + 100)
         assertNull("the balloon goes", balloon())
         assertTrue("the face stays", Bubble.shown)
@@ -154,6 +162,7 @@ internal class NuisanceTest : SurfaceCase() {
         val opened = shadowOf(app).nextStartedActivity
         assertTrue(opened.toUri(0), opened.toUri(0).contains("unlock"))
         assertFalse("once", Unlock.waiting)
+        assertEquals("the core hears it, so no later refresh waits again", listOf("unlocked"), told)
         assertNull("nothing holds the process any more", NagService.running)
     }
 
@@ -175,6 +184,32 @@ internal class NuisanceTest : SurfaceCase() {
         ShadowSettings.setCanDrawOverlays(false)
         o.waitUnlock(clock + 10 * 60_000L)
         assertFalse(Unlock.waiting)
+    }
+
+    /**
+     * Once per dose through the core: her unlock opened the nag route, so the app's resume after it (a refresh) waits
+     * for nothing again, even when the route never says it shows the dose. Found on the emulator (engine-device,
+     * 2026-11-22): the resume armed the wait again and her next unlock opened the route a second time.
+     */
+    @Test fun theUnlockOpensOnceAcrossTheCoresNextRefresh() {
+        Told.reset()
+        ShadowSettings.setCanDrawOverlays(true)
+        phone(locked = true, on = false)
+        val p = planJson().apply { getJSONObject("steps").put("unlock", true) }
+        Engine.schedule(app, p, at("2026-11-18T07:00"))
+        for (t in listOf("08:00", "08:20", "08:35")) { clock = at("2026-11-18T$t"); Engine.fire(app, clock) }
+        assertEquals("2026-11-18T08:00", AndroidOut.last?.groups?.firstOrNull())
+        assertTrue("after the full screen it waits", Unlock.waiting)
+        clock = at("2026-11-18T08:36")
+        phone(locked = false, on = true)
+        broadcast(Intent.ACTION_USER_PRESENT)
+        assertTrue(shadowOf(app).nextStartedActivity.toUri(0).contains("unlock"))
+        assertFalse(Unlock.waiting)
+        clock = at("2026-11-18T08:37")
+        Engine.restore(app, clock, front = true)
+        assertFalse("the resume after it waits for nothing", Unlock.waiting)
+        Engine.restore(app, at("2026-11-18T08:38"))
+        assertFalse("nor a later refresh", Unlock.waiting)
     }
 
     // MARK: the ring service (item 9) and the stop contract (item 10)

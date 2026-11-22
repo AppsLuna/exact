@@ -471,6 +471,14 @@ internal object Rules {
         for (g in st.groups.values) if (g.last == Step.AGAIN && (g.nag == nag || nag == 0)) g.nested = true
     }
 
+    /** The nag route opened at her unlock: every group waiting for it after its full screen is done waiting (once per
+     * dose, item 12). Whether one was. */
+    fun unlocked(st: State): Boolean {
+        var any = false
+        for (g in st.groups.values) if (g.last == Step.FULL && !g.unlocked) { g.unlocked = true; any = true }
+        return any
+    }
+
     /** The nag screen opened on [keys]: an alarm ringing for them stops, the opening at the unlock is done, and nothing
      * else moves: the next step comes at its time. A post of theirs that fired in front has been shown ([front]). */
     fun opened(plan: Plan, st: State, keys: Collection<String>, now: Long, out: MutableList<Event>) {

@@ -81,6 +81,8 @@ component Fixture
                 text "Promise"
               button press=act("ack") testId="ack"
                 text "Ack"
+              button press=act("state") testId="state"
+                text "State"
               button press=act("fast") testId="fast"
                 text "Fast"
               button press=act("testNotify") testId="test-notify"

@@ -277,7 +277,14 @@ internal object Shade {
     fun showing(c: Context): List<StatusBarNotification> = runCatching { nm(c).activeNotifications.toList() }.getOrDefault(emptyList())
 
     /** [n] posted as [id], unless notifications are off. */
-    fun notify(c: Context, id: Int, n: Notification) { if (nm(c).areNotificationsEnabled()) nm(c).notify(id, n) }
+    fun notify(c: Context, id: Int, n: Notification) {
+        if (!nm(c).areNotificationsEnabled()) return
+        posting?.invoke(id, showing(c).map { it.id })
+        nm(c).notify(id, n)
+    }
+
+    /** The tests' view of each post: its id, and the ids showing just before it (the order of a cancel and a post). */
+    @Volatile internal var posting: ((Int, List<Int>) -> Unit)? = null
 
     fun cancel(c: Context, id: Int) {
         nm(c).cancel(id)
@@ -324,14 +331,16 @@ internal object Shade {
         val there = showing(c).firstOrNull { it.id == id }
         if (there != null && there.notification.extras.getInt(EXTRA_NAG, -1) == p.nag) return refresh(c, plan, p)
         val look = look(c, plan, p, fresh = true)
-        // The one showing at this id is an older step's: it goes first, so this one is new and alerts.
+        // The one showing at this id is an older step's: it goes first, so this one is new and alerts. So does the one at
+        // the other id: posted beside it, the two may join an automatic group, and Android 16 posts a notification that
+        // joins one silently (seen on the emulator: De novo after a reboot, beside the reminder restored silently).
         if (there != null) nm(c).cancel(id)
+        cancelOther(c, id)
         // Tela cheia is silent over the lock screen; where Android wouldn't open it, it is her reminder, sounding.
         val sounds = p.sounding || (p.fullScreen && !p.front && look.kind == Kind.REMIND)
         val quiet = !sounds && look.channel.startsWith(CH_REMIND)
         notify(c, id, build(c, plan, p, look, quiet))
         synchronized(shown) { shown[id] = look.toString(); confirming = null }
-        cancelOther(c, id)
     }
 
     /**

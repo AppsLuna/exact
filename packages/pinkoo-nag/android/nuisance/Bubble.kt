@@ -173,12 +173,17 @@ internal object Bubble : Nuisance {
         }
         val size = dp(c, 64)
         val width = c.resources.displayMetrics.widthPixels
-        val onRight = x + size / 2 >= width / 2
+        // The face's place, read before `apply`: inside it a bare `x` is the new window's own (0), which put the balloon
+        // off the screen's left edge (seen on the emulator: its frame at [-389,948][-16,1058]).
+        val faceX = x
+        val faceY = y
+        val onRight = faceX + size / 2 >= width / 2
         val p = params(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or (if (onRight) Gravity.END else Gravity.START), touchable = false).apply {
             alpha = BALLOON_ALPHA
-            this.x = if (onRight) width - x + dp(c, 6) else x + size + dp(c, 6)
-            this.y = this@Bubble.y + dp(c, 8)
+            // Beside the face, 6 dp from it: from the screen's right edge when the face sits on the right (END gravity).
+            this.x = if (onRight) width - faceX + dp(c, 6) else faceX + size + dp(c, 6)
+            this.y = faceY + dp(c, 8)
         }
         if (runCatching { wm(c).addView(tv, p) }.isFailure) return
         balloon = tv

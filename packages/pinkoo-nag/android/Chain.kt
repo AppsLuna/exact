@@ -270,6 +270,14 @@ internal object Engine {
         commit(c, plan, st, emptyList(), now, why = why)
     }
 
+    /** Her first unlock after the full screen opened the nag route ("Abrir quando eu desbloquear"): the wait is done for
+     * that step, so no refresh waits again (the activity's resume is one); nothing else moves and nothing is logged. */
+    @Synchronized fun unlocked(c: Context, now: Long = now()) {
+        val (plan, st) = load(c, now) ?: return
+        if (!Rules.unlocked(st)) return
+        commit(c, plan, st, emptyList(), now, why = "unlock")
+    }
+
     @Synchronized fun opened(c: Context, keys: List<String>, now: Long = now()) {
         val (plan, st) = load(c, now) ?: return
         val events = ArrayList<Event>()

@@ -78,9 +78,10 @@ const SCENARIOS: Record<string, Scenario> = {
   ontime: { ladder: ladder(1, 1, 2, 1, 1), steps: none, doses: (t) => [{ at: t, sound: 'sininho', alarm: 'onTime' }] },
   // 4. The bubble alone: T, T+1 (the bubble), T+2 (one repeat).
   bubble: { ladder: ladder(1, 1, 1, 1, 1), steps: { bubble: true, fullScreen: false, unlock: false }, doses: (t) => [{ at: t, sound: 'sininho', alarm: 'off' }] },
-  // 5. Three dose times a minute apart, each reaching Tela cheia a minute after the one before (T+2, T+3, T+4).
+  // 5. Three dose times three minutes apart, each reaching Tela cheia in a minute of its own (T+2, T+5, T+8): no other
+  // dose time's step falls in it, so the post at that minute is that Tela cheia's.
   fullscreen: { ladder: ladder(1, 1, 1, 1, 0), steps: { bubble: false, fullScreen: true, unlock: false },
-    doses: (t) => [0, 1, 2].map((i) => ({ at: t + i * MIN, sound: 'sininho', alarm: 'off' as Alarm })) },
+    doses: (t) => [0, 1, 2].map((i) => ({ at: t + 3 * i * MIN, sound: 'sininho', alarm: 'off' as Alarm })) },
   // 6. Every kind of sound, hours ahead: their channels are made with the plan.
   channels: { ladder: ladder(20, 15, 30, 60, 3), steps: none, lead: 6 * 3600,
     doses: (t) => ['sininho', 'vibrate', 'silent', PHONE].map((sound, i) => ({ at: t + i * 60 * MIN, sound, alarm: 'off' as Alarm })) },
@@ -142,6 +143,8 @@ const sources: Sources = {
       return { text: `promised ${keys.length} until ${until}` };
     } else if (what === 'ack') { const last = s.events.at(-1); if (last) await ackNagEvents({ through: last.id }); }
     else if (what === 'fast') fast = true;
+    // What the engine answers now, read by a call of its own rather than the `doses` resource the screen shows.
+    else if (what === 'state') return { text: `state ${s.doses.map((d) => `${d.state}:${d.step ?? '-'}:${d.fires}`).join(',')} | ${s.events.map((v) => `${v.kind}:${v.reason ?? '-'}`).join(',')}` };
     else if (what === 'resend') {
       // The plan of the engine's doses again, with a changed setting (the alarm's volume), as Pinkoo sends one after
       // a change in Ajustes: the engine reads it whole again.

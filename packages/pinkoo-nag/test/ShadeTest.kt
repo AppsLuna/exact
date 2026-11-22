@@ -102,6 +102,23 @@ internal class ShadeTest : SurfaceCase() {
         assertTrue("posted anew, silently", quiet(nag()!!.notification))
     }
 
+    /**
+     * The next step after the reminder was restored silently (a reboot, a cleared notification): the silent one goes
+     * before the step posts, never beside it. Posted beside it, the two joined an automatic group on the emulator
+     * (Android 16), which posted the step silently: De novo after a reboot made no sound (engine-device, 2026-11-22).
+     */
+    @Test fun aStepAfterASilentRestoreCancelsItBeforeItPosts() {
+        val o = out()
+        o.refresh(post(1, sounding = false))
+        assertTrue(quiet(shown(Shade.nagId(1))!!.notification))
+        val seen = ArrayList<Pair<Int, List<Int>>>()
+        Shade.posting = { id, before -> seen += id to before }
+        try { o.post(post(2)) } finally { Shade.posting = null }
+        assertEquals(listOf(Shade.nagId(2) to emptyList<Int>()), seen)
+        assertFalse("it sounds", quiet(nag()!!.notification))
+        assertEquals(Shade.nagId(2), nag()!!.id)
+    }
+
     /** A step folded into the alarm, or posted while nothing may sound, is a new post that doesn't alert. In front
      * (decision 17) it goes on the waiting channel: no heads-up, no full-screen intent. */
     @Test fun aPostThatMustNotSoundIsSilentAndInFrontItIsOnTheWaitingChannel() {

@@ -23,12 +23,15 @@
 //  3. "Já na hora": the alarm rings at the dose time with the notification folded into it (only the ring sounds) on a
 //     dark phone, and keeps ringing past its own post; the power key stops it. De novo, then a promise: its countdown
 //     (a Live Update on 36.1 and later), nothing else while it runs, the alarm clock at the deadline; there the alarm
-//     rings again, folded, stops at its 60 s cap (logged as its timeout), and the thread goes on with a repeat.
-//  4. The bubble over another app: the face and its balloon; a tap on the balloon reaches the app under it (Android's
-//     untrusted-touch rule), the balloon goes after about 6 s; a tap on the face opens the nag route; the face sent to
-//     the nest stays there across a process death, and the next step brings no bubble (it lives one step).
-//  5. Tela cheia that can't open: full-screen access denied (`appops`, as a Play install starts on Android 14 and
-//     later), the phone in use, Do Not Disturb on: each time the notification again, on her channel, and nothing opens.
+//     rings again, folded, stops at its 60 s cap (logged as its timeout, read by the engine's own answer: the fixture's
+//     "State"), and the thread goes on with a repeat.
+//  4. The bubble over the launcher's home screen (Settings and Files hide other apps' overlays): the face and, beside it
+//     on the screen, its balloon; a long press on the balloon reaches the launcher under it (its own menu opens:
+//     Android's untrusted-touch rule), the balloon goes after about 6 s; a tap on the face opens the nag route; the face
+//     sent to the nest stays there across a process death, and the next step brings no bubble (it lives one step).
+//  5. Tela cheia that can't open, each dose time's in a minute of its own: full-screen access denied (`appops --uid`, as
+//     a Play install starts on Android 14 and later), the phone in use, Do Not Disturb on: each time that dose time's
+//     notification again, on her channel, and nothing opens.
 //  6. The channels: one per sound the plan names (a preset from `res/raw`, "Só vibrar", "Sem som", a phone sound),
 //     high importance, notification usage; "Full screen and alarm" is `pinkoo.nag`; no `pinkoo.nag.ring`; a later plan
 //     that no longer names a sound deletes its channel.
@@ -45,8 +48,9 @@
 // 11. The experience test (`rehearse`): its notification step on her channel with "Stop", its wait an exact alarm of
 //     its own, gone after 15 s, no state and no event; the alarm sample stops at 10 s; the full-screen step arms at the
 //     screen turning off and opens the nag route in test mode over the keyguard.
-// 12. A reboot between the notification and De novo, locked with a PIN: armed again at boot; De novo and the alarm come
-//     before the first unlock, audibly; the unlock stops the ring.
+// 12. A reboot between the notification and De novo, locked with a PIN: armed again at boot, the reminder restored
+//     silently; De novo (posted after the restored one went, never beside it) and the alarm come before the first
+//     unlock, audibly; the unlock stops the ring.
 //
 // Not driven here: "the alarm on time after a code-0 fire 40 min late" has no trigger an emulator reproduces on demand
 // (group 8's rare bucket shows it when Android holds code 0 back there); `EngineTest` proves it. What needs a phone is
@@ -100,6 +104,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   const near = (a, b, ms = 2000) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= ms;
   const untilDevice = async (epoch) => { const left = epoch - deviceNow(); if (left > 0) await wait(left); };
   const late = (r, at) => (r ? `${((r.created - at) / 1000).toFixed(1)} s after ${hhmm(at)}` : `nothing by ${hhmm(deviceNow())}`);
+  /** How far a time worked out from post [r]'s fire may sit from its nominal one: 2 s, plus how late [r] came after [at]. */
+  const slack = (r, at) => 2000 + Math.max(0, (r?.created ?? at) - at);
 
   // ---------- the screen ----------
   let W = 1080, H = 2340;
@@ -128,6 +134,10 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   /** The app in front at its home screen, whatever route it was left on (a link's location, as any app may send). */
   const launch = (url = '/') => sh(`am start -W -a android.intent.action.VIEW -d '${url}' -n ${id}/dev.exact.app.MainActivity`);
   const home = () => sh('input keyevent KEYCODE_HOME');
+  /** The app sent behind the launcher on a locked phone: the home key, and the launcher started by its intent, since
+   * Android 13's home key doesn't reach past an app that was shown over the keyguard (her unlock then brought the app
+   * itself back, and nothing was left for "Abrir quando eu desbloquear" to open). */
+  const awayLocked = () => { home(); if (sdk < 34) sh('am start -a android.intent.action.MAIN -c android.intent.category.HOME'); };
   const back = () => sh('input keyevent KEYCODE_BACK');
   const sleep = () => sh('input keyevent KEYCODE_SLEEP');
   const wake = () => sh('input keyevent KEYCODE_WAKEUP');
@@ -270,7 +280,23 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       if (!n) return false;
       if (await until(() => !reminder(), 3000, 500)) return true;
     }
-    return false;
+    // Her other way to dismiss it, where the swipe didn't take (Android 13's shade, with the bubble's windows up): the
+    // shade's "Clear all", which sends each cleared notification's delete intent as a swipe does.
+    sh('cmd statusbar expand-notifications');
+    await wait(1200);
+    const all = await until(() => shade().find((x) => /^Clear all/i.test(x.text) || /^Clear all/i.test(x.desc)), 6000, 700);
+    if (all) { console.log('   the swipe did not take: cleared with "Clear all"'); tap(all); }
+    await wait(1200);
+    sh('cmd statusbar collapse');
+    return !!all && !!(await until(() => !reminder(), 3000, 500));
+  };
+  /** A collapsed notification in the shade opened so its actions show: its own expand button (the chevron at the row's
+   * end; a drag down on the row doesn't open one on the keyguard's shade), else dragged down. */
+  const expand = async (row) => {
+    const chevron = shade().filter((n) => /^Expand/i.test(n.desc) && Math.abs(n.y - row.y) < 160).sort((a, b) => Math.abs(a.y - row.y) - Math.abs(b.y - row.y))[0];
+    if (chevron) tap(chevron);
+    else sh(`input swipe ${row.x} ${row.y} ${row.x} ${row.y + 300} 250`);
+    await wait(900);
   };
   /** The action [label] of our notification titled [title], pressed in the shade. */
   const pressInShade = async (title, label) => {
@@ -278,9 +304,9 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     await wait(1200);
     let a = shade().find((n) => matches(n, label));
     if (!a) {
-      // Expanded so its actions show: dragged down.
+      // Expanded so its actions show.
       const row = await until(() => shade().find((n) => n.text.startsWith(title)), 6000, 700);
-      if (row) { sh(`input swipe ${row.x} ${row.y} ${row.x} ${row.y + 300} 250`); await wait(900); }
+      if (row) await expand(row);
       a = await until(() => shade().find((n) => matches(n, label)), 4000, 700);
     }
     if (a) tap(a);
@@ -307,7 +333,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
     sh('cmd notification set_dnd off');
     sh(`cmd appops set ${id} SCHEDULE_EXACT_ALARM allow`);
     sh(`cmd appops set ${id} RUN_ANY_IN_BACKGROUND allow`);
-    if (sdk >= 34) sh(`cmd appops set ${id} USE_FULL_SCREEN_INTENT allow`);
+    if (sdk >= 34) sh(`cmd appops set --uid ${id} USE_FULL_SCREEN_INTENT allow`);
     sh(`am set-standby-bucket ${id} active`);
     stayOn(false);
     await open();
@@ -336,7 +362,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
   uid = (sh(`cmd package list packages -U ${id}`).match(/uid:(\d+)/) ?? [])[1] ?? '?';
   sh(`cmd appops set ${id} SCHEDULE_EXACT_ALARM allow`);
   sh(`cmd appops set ${id} SYSTEM_ALERT_WINDOW allow`);
-  if (sdk >= 34) sh(`cmd appops set ${id} USE_FULL_SCREEN_INTENT allow`);
+  // Full-screen access is the uid's mode (the install's grant sets it), which a package mode can't override.
+  if (sdk >= 34) sh(`cmd appops set --uid ${id} USE_FULL_SCREEN_INTENT allow`);
   [W, H] = (sh('wm size').match(/(\d+)x(\d+)/) ?? [0, W, H]).slice(1).map(Number);
   sh('cmd audio set-ringer-mode NORMAL');
   // Android 15's notification cooldown softens an app's alerts that come within a minute or two of each other, as the
@@ -379,7 +406,10 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(1, 'no full screen, no ring, no service: the screen stays dark', n1 && !n1.fsi && !playing() && !serving() && !awake(), `${top()} ${services().slice(0, 300)}`);
       c(1, 'the alarm started the process for its broadcast', /Start proc .*for broadcast/.test(logcat()), null);
       const a1 = alarms();
-      c(1, 'then code 0 at De novo (T+1), the backup beside it, the alarm clock kept at T+5', near(code0(a1)?.at, T + MIN) && a1.some((a) => a.inexact && near(a.at, T + MIN)) && a1.some((a) => a.clock && near(a.at, T + 5 * MIN)), list(a1));
+      // Each step counts from the one before as it really fired (`Rules.fire`), so a fire a few seconds late moves the
+      // next ones, the alarm clock included, by as much.
+      const late1 = slack(n1, T);
+      c(1, 'then code 0 at De novo (T+1), the backup beside it, the alarm clock kept at T+5', near(code0(a1)?.at, T + MIN, late1) && a1.some((a) => a.inexact && near(a.at, T + MIN, late1)) && a1.some((a) => a.clock && near(a.at, T + 5 * MIN, late1)), list(a1));
 
       // T+1: De novo, with the bubble.
       const n2 = await posted(Math.max(n1?.created ?? 0, T + MIN - 5000), T + MIN + 25_000);
@@ -387,14 +417,19 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(1, 'sounding again', await sounded(n2), soundKey());
       c(1, 'one reminder at a time: the first one went', reminders().length === 1, reminders().map((r) => r.id));
       c(1, "its line is rung 1's", n2?.text === LINES[1], n2?.text);
-      const service = records().find(isService);
-      c(1, 'the ring service holds the bubble, on its own low-importance notification', serving() && service?.channel === 'pinkoo.nag.waiting' && service.id !== n2?.id, service?.raw ?? services().slice(0, 400));
+      // The service starts beside the post (its window first). Android shows a foreground service's notification up to
+      // 10 s late (its deferral), so what it runs under is read off the service's own record: its notification's id and
+      // channel.
+      const fg = await until(() => { const m = services().match(/isForeground=true[\s\S]*?foregroundId=(-?\d+)[\s\S]*?foregroundNoti=Notification\(channel=(\S+)/); return m ? { id: Number(m[1]), channel: m[2] } : null; }, 8000, 700);
+      c(1, 'the ring service holds the bubble, on its own low-importance notification', serving() && fg?.channel === 'pinkoo.nag.waiting' && fg.id !== n2?.id, JSON.stringify(fg) + services().slice(0, 1500));
       c(1, 'and the reminder stays swipeable (not ongoing)', n2 && !reminder()?.flags.has('ONGOING_EVENT'), reminder()?.raw);
       c(1, 'locked and dark: the balloon waits', !balloon(), overlays().map((w) => w.block));
       await open();
       const unlockedAt = Date.now();
       const b1 = await until(() => balloon(), 5000, 300);
       shot('01-balloon.png');
+      await wait(1200);
+      shot('01-balloon-drawn.png');
       c(1, 'unlocked: the balloon shows at once, beside the face', !!b1 && !!face(), overlays().map((w) => w.block));
       c(1, 'it lets taps through: untouchable, drawn at an alpha of 0.8 or less', b1 && b1.notTouchable && b1.alpha <= 0.8, b1?.block);
       await wait(Math.max(0, unlockedAt + 9000 - Date.now()));
@@ -415,11 +450,13 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       shot('01-full-screen.png');
       const n3 = reminder();
       c(1, 'T+3: Tela cheia opens the nag route over the PIN keyguard, the screen on', !!fsi && keyguard().showing, `${top()} ${JSON.stringify(keyguard())}`);
-      c(1, 'through a new post with its full-screen intent, on time, the swipe forgotten', n3 && n3.fsi && n3.created - (T + 3 * MIN) < ON_TIME, `${late(n3, T + 3 * MIN)} ${n3?.raw}`);
+      // The route's resume refreshes the post in place within a second (waiting and silent, on her channel), which drops
+      // the intent from the record: the launch above is the intent's proof, and the record that it came anew at T+3.
+      c(1, 'through a new post with its full-screen intent, on time, the swipe forgotten', n3 && (n3.fsi || !!fsi) && n3.id !== n2?.id && n3.created > (n2?.created ?? 0) && n3.created - (T + 3 * MIN) < ON_TIME, `${late(n3, T + 3 * MIN)} ${n3?.raw}`);
       c(1, 'silent: no sound of its own, no ring', n3 && soundKey() !== n3.key && !playing(), soundKey());
       c(1, 'the route is the full screen\'s', !!(await until(() => find(/via=fsi/), 6000, 700)), line('/'));
       await press('Leave', 6000);
-      home();
+      awayLocked();
       sleep();
       c(1, 'the bubble went with its step', await until(() => !overlay(), 4000), overlays().map((w) => w.block));
       await wait(15_000);
@@ -461,8 +498,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       let stop = locked.find((n) => matches(n, TEXT.stop));
       if (!stop) {
         const row = locked.find((n) => n.text.startsWith(TEXT.alarm));
-        if (row) { sh(`input swipe ${row.x} ${row.y} ${row.x} ${row.y + 300} 250`); await wait(900); }
-        stop = shade().find((n) => matches(n, TEXT.stop));
+        if (row) await expand(row);
+        stop = await until(() => shade().find((n) => matches(n, TEXT.stop)), 4000, 700);
       }
       shot('01-locked-shade.png');
       c(1, 'and shows the alarm whole, "Stop" included', !!stop, locked.map((n) => n.text).filter(Boolean));
@@ -480,12 +517,13 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(1, 'sounding, with no bubble, full screen or alarm', (await sounded(r1)) && !r1.fsi && !overlay() && !playing(), `${soundKey()} ${r1?.raw}`);
       c(1, "its line is rung 4's (the top)", r1?.text === LINES[4], r1?.text);
       c(1, '"Not now" pressed in the shade', await pressInShade(TEXT.title, TEXT.notNow), null);
-      const conf = await until(() => { const r = reminder(); return r && r.created === r1?.created && TEXT.again.test(r.text) ? r : null; }, 6000, 500);
+      // The confirmation is the post's title (`Shade.confirm`), with no text under it.
+      const conf = await until(() => { const r = reminder(); return r && r.created === r1?.created && TEXT.again.test(r.title) ? r : null; }, 6000, 500);
       c(1, 'it turns the post, in place and silently, into the confirmation with the next time', conf && conf.flags.has('ONLY_ALERT_ONCE'), reminder()?.raw);
       c(1, 'and opens nothing', !ours(), top());
       const next = code0();
-      const said = conf?.text.match(TEXT.again);
-      c(1, 'the next repeat moved to one interval after the tap, the time it says', conf && next && near(next.at, conf.updated + MIN, 5000) && said && hhmm(next.at) === `${said[1]}:${said[2]}`, `${list(alarms())} said ${conf?.text} at ${hhmm(conf?.updated ?? 0)}`);
+      const said = conf?.title.match(TEXT.again);
+      c(1, 'the next repeat moved to one interval after the tap, the time it says', conf && next && near(next.at, conf.updated + MIN, 5000) && said && hhmm(next.at) === `${said[1]}:${said[2]}`, `${list(alarms())} said ${conf?.title} at ${hhmm(conf?.updated ?? 0)}`);
       c(1, 'the confirmation goes after 5 s', await until(() => !reminder(), 9000, 500), reminder()?.raw);
       launch();
       await act('Resend');
@@ -499,8 +537,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const r3 = await posted((r2?.created ?? T + 7 * MIN) + MIN - 5000, (r2?.created ?? T + 7 * MIN) + MIN + 25_000);
       c(1, 'the third repeat a minute later', r3 && r2 && r3.created - (r2.created + MIN) < ON_TIME, late(r3, (r2?.created ?? 0) + MIN));
       c(1, '"Not now" on the last one', await pressInShade(TEXT.title, TEXT.notNow), null);
-      const last = await until(() => { const r = reminder(); return r && r.text === TEXT.waits ? r : null; }, 6000, 500);
-      c(1, 'says the dose waits on Today: nothing comes before it is missed', !!last, reminder()?.text);
+      const last = await until(() => { const r = reminder(); return r && r.title === TEXT.waits ? r : null; }, 6000, 500);
+      c(1, 'says the dose waits on Today: nothing comes before it is missed', !!last, reminder()?.title);
       const capped = alarms();
       c(1, 'the cap of 3: no step armed within the hour, no alarm clock', !capped.some((a) => a.clock) && !(code0(capped)?.at < deviceNow() + 60 * MIN), list(capped));
       await wait(75_000);
@@ -537,7 +575,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       shot('02-full-screen-a.png');
       c(2, "A's Tela cheia over the keyguard, its own route", !!fsiA && routeOf(TA).test(nagA), `${top()} ${nagA}`);
       await press('Leave', 6000);
-      home();
+      awayLocked();
       sleep();
       await wait(2000);
       // TB: B's first notification.
@@ -597,6 +635,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       await press('Promise');
       const said = await until(() => find(/^promised \d+ until \d+/)?.text, 8000, 700);
       const deadline = Number(said?.match(/until (\d+)/)?.[1]);
+      await until(() => /promised:/.test(line('doses ')), 5000, 700);
+      const promisedWith = `${line('doses ')}\n${line('events ')}\n${top()}\npid ${pid()}`;
       const promise = await until(() => records().find((r) => / by \d\d:\d\d/.test(r.title)), 8000, 700);
       save('03-promise.txt', promise?.raw ?? records().map((r) => r.raw).join('\n----\n'));
       c(3, 'the promise posts its countdown', !!promise && /chronometerCountDown=[^\n]*true/.test(promise.raw), promise?.raw?.slice(0, 600));
@@ -621,9 +661,21 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(3, 'unanswered, it stops at its 60 s cap', quiet && quietAt - ring2At > 50_000 && quietAt - deadline < 75_000, `${((quietAt - ring2At) / 1000).toFixed(0)} s`);
       const r = await posted(deadline + 30_000, deadline + 2 * MIN + 30_000);
       c(3, 'then the thread goes on: a repeat, with her sound and no ring', r && (await sounded(r)) && !playing(), late(r, deadline + 2 * MIN));
+      const before3 = `pid ${pid()}\n${sh(`dumpsys activity activities | grep -E "ActivityRecord\\{.*${id}"`)}\n${list(alarms())}`;
+      // The phone is still dark and locked from the deadline: opened first, or the app stays paused under the keyguard,
+      // its screen what it last drew and taps landing on the keyguard.
+      await open();
       launch();
-      const events = await until(() => { const t = line('events '); return t.includes('timeout') ? t : null; }, 8000, 700) ?? line('events ');
-      c(3, 'the cap is logged as the alarm\'s timeout', events.includes('ignored:timeout'), events);
+      // What the engine answers, by a call of its own (the fixture's "State"), and what the screen's resource shows: the
+      // check is the engine's; a resource still showing the promise is the app runtime's (it is recorded beside it).
+      await until(() => line('events '), 8000, 700);
+      const shown3 = `${line('events ')} | ${line('doses ')}`;
+      await act('State');
+      const told = await until(() => find(/^state /)?.text, 8000, 700) ?? '';
+      if (!/timeout/.test(shown3) && /timeout/.test(told)) console.log(`   3. the screen's resource still showed ${shown3}; the engine's call said ${told}`);
+      save('03-events.txt', [`engine: ${told}\nscreen: ${shown3}\n${top()}\npid ${pid()}`, `after the promise:\n${promisedWith}`, `before the launch:\n${before3}`,
+        logcat().split('\n').filter((l) => /pinkoo|nagfixture|exact/i.test(l) && !/attributionTag/.test(l)).slice(-120).join('\n')].join('\n\n----\n'));
+      c(3, 'the cap is logged as the alarm\'s timeout', /\bignored:timeout\b/.test(told), `engine: ${told} | screen: ${shown3}`);
     });
 
     await group(4, 'the bubble over another app', async () => {
@@ -633,31 +685,39 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       await stopApp();
       clearLog();
       await untilDevice(T + 20_000);
-      // The app under it: Settings, scrolled so its rows fill the screen.
-      sh('am start -W -a android.settings.SETTINGS');
-      await wait(1500);
-      sh(`input swipe ${W >> 1} ${Math.round(H * 0.7)} ${W >> 1} ${Math.round(H * 0.4)} 300`);
+      // The app under it: the launcher's home screen, empty where the balloon shows. Not Settings, nor Files: they hide
+      // every other app's overlay while they show (`HIDE_NON_SYSTEM_OVERLAY_WINDOWS`), so the bubble never appears there.
+      home();
       const b = await until(() => balloon(), T + MIN + 25_000 - deviceNow(), 300);
       const seenAt = Date.now();
       shot('04-balloon.png');
+      save('04-overlays.txt', overlays().map((w) => `${JSON.stringify({ frame: w.frame, alpha: w.alpha, notTouchable: w.notTouchable, visible: w.visible })}\n${w.block}`).join('\n\n'));
+      await wait(1200);
+      shot('04-balloon-drawn.png');
       c(4, 'T+1: the face and its balloon over another app', !!b && !!face(), overlays().map((w) => w.block));
       c(4, 'the ring service started from the background, the window first', serving() && !/Background started FGS: Disallowed[^\n]*NagService/.test(logcat()), services().slice(0, 300));
       if (b) {
         const before = top(), screen = nodes().map((n) => n.text).join('|');
         clearLog();
-        sh(`input tap ${b.x} ${b.y}`);
-        await wait(1500);
-        const log = logcat();
-        save('04-tap-through.txt', `${before}\n${top()}\n${log.split('\n').filter((l) => /InputDispatcher|untrusted|obscur/i.test(l)).join('\n')}`);
-        c(4, 'a tap on the balloon reaches the app under it, not Pinkoo', !/Untrusted touch|Dropping untrusted touch/i.test(log) && !ours() && (top() !== before || nodes().map((n) => n.text).join('|') !== screen), `${before} -> ${top()}`);
+        // A long press there opens the launcher's own menu (Wallpaper, Widgets…) only if the touch passed through.
+        sh(`input swipe ${b.x} ${b.y} ${b.x} ${b.y} 1200`);
+        await wait(800);
+        const log = logcat(), after = nodes().map((n) => n.text).join('|');
+        save('04-tap-through.txt', `${before}\n${top()}\n${screen}\n${after}\n${log.split('\n').filter((l) => /InputDispatcher|untrusted|obscur/i.test(l)).join('\n')}`);
+        c(4, 'a touch on the balloon reaches the app under it, not Pinkoo', !/Untrusted touch|Dropping untrusted touch/i.test(log) && !ours() && (top() !== before || after !== screen), `${before} -> ${top()}: ${after}`);
         back();
       }
       await wait(Math.max(0, seenAt + 9000 - Date.now()));
       c(4, 'the balloon goes after about 6 s; the face stays', !balloon() && !!face(), overlays().map((w) => w.block));
       home();
-      const f = await until(() => face(), 5000, 500);
+      // Seen (not hidden by the app it was over) and laid out, so the tap lands on it.
+      const f = await until(() => { const w = face(); return w?.visible && w.frame ? w : null; }, 8000, 500);
       if (f) sh(`input tap ${f.x} ${f.y}`);
-      c(4, 'a tap on the face opens the nag route', !!f && !!(await until(() => ours() && find(/via=bubble/), 10000, 700)), top());
+      // The nag route of this dose time: its link (`via=bubble`) where the app was already up; a cold start shows the
+      // route's title only (the fixture's link line fills on navigation).
+      const tapped = !!f && !!(await until(() => ours() && (find(/via=bubble/) || routeOf(T).test(find(/^NAG /)?.text ?? '')), 10000, 700));
+      if (!tapped) shot('04-face-tap.png');
+      c(4, 'a tap on the face opens the nag route', tapped, `${JSON.stringify(f?.frame)} ${top()} ${find(/^NAG /)?.text ?? ''} ${find(/^\/nag\//)?.text ?? ''}`);
       home();
       const f2 = await until(() => face(), 6000, 500);
       c(4, 'leaving brings the face back', !!f2, null);
@@ -676,20 +736,23 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
 
     await group(5, 'Tela cheia that cannot open', async () => {
       launch();
-      const [TX] = await plan('Full screen');
-      const fullAt = [TX + 2 * MIN, TX + 3 * MIN, TX + 4 * MIN];
+      const [TX, TY, TZ] = await plan('Full screen');
+      // Each dose time's Tela cheia in a minute of its own (fixture/app.ts): the post then is that dose time's, which its
+      // look says (`lead`), and how it showed (`kind`: REMIND where Android wouldn't open a full screen).
+      const fullAt = [TX + 2 * MIN, TY + 2 * MIN, TZ + 2 * MIN];
+      const lead = (r, t) => !!r && r.raw.includes(`lead=${new Date(t + offset).toISOString().slice(0, 16)},`) && /Look\(kind=REMIND/.test(r.raw);
       home();
       await stopApp();
       // X's Tela cheia, the access denied (from Android 14: a Play install starts so; Android 12 and 13 have no
       // such switch, so there the phone stays in use for it).
       if (sdk >= 34) {
-        sh(`cmd appops set ${id} USE_FULL_SCREEN_INTENT deny`);
+        sh(`cmd appops set --uid ${id} USE_FULL_SCREEN_INTENT deny`);
         setPin();
         sleep();
         const x = await posted(fullAt[0] - 1500, fullAt[0] + 25_000);
         await wait(3000);
-        c(5, 'access denied: Tela cheia is the notification again, on her channel, sounding; nothing opens', x && remindChannel(x) && !x.fsi && !awake() && !ours() && (await sounded(x)), `${late(x, fullAt[0])} ${x?.raw}`);
-        sh(`cmd appops set ${id} USE_FULL_SCREEN_INTENT allow`);
+        c(5, 'access denied: Tela cheia is the notification again, on her channel, sounding; nothing opens', lead(x, TX) && remindChannel(x) && !x.fsi && !awake() && !ours() && (await sounded(x)), `${late(x, fullAt[0])} ${x?.raw}`);
+        sh(`cmd appops set --uid ${id} USE_FULL_SCREEN_INTENT allow`);
       } else await untilDevice(fullAt[0] + 5000);
       // Y's, the phone in use.
       await open();
@@ -697,14 +760,14 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const y = await posted(fullAt[1] - 1500, fullAt[1] + 25_000);
       await wait(2000);
       shot('05-in-use.png');
-      c(5, 'the phone in use: Tela cheia is a heads-up on her channel, sounding; nothing opens', y && remindChannel(y) && !y.fsi && !ours() && (await sounded(y)), `${late(y, fullAt[1])} ${top()}`);
+      c(5, 'the phone in use: Tela cheia is a heads-up on her channel, sounding; nothing opens', lead(y, TY) && remindChannel(y) && !y.fsi && !ours() && (await sounded(y)), `${late(y, fullAt[1])} ${top()} ${y?.raw}`);
       // Z's, Do Not Disturb on.
       sh('cmd notification set_dnd priority');
       setPin();
       sleep();
       const z = await posted(fullAt[2] - 1500, fullAt[2] + 25_000);
       await wait(3000);
-      c(5, 'Do Not Disturb on: Tela cheia is the notification again, and nothing lights the room', z && remindChannel(z) && !z.fsi && !awake() && !ours(), `${late(z, fullAt[2])} awake=${awake()}`);
+      c(5, 'Do Not Disturb on: Tela cheia is the notification again, and nothing lights the room', lead(z, TZ) && remindChannel(z) && !z.fsi && !awake() && !ours(), `${late(z, fullAt[2])} awake=${awake()} ${z?.raw}`);
       sh('cmd notification set_dnd off');
     });
 
@@ -785,7 +848,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       r = await posted(T - 1500, T + 30_000);
       c(8, 'the step comes on time', r && r.created - T < ON_TIME, `${late(r, T)} bucket ${bucket()}`);
       a = alarms();
-      c(8, 'and the next one is armed as an alarm clock again', a.some((x) => x.clock && near(x.at, T + MIN, 3000)), `${bucket()} ${list(a)}`);
+      c(8, 'and the next one is armed as an alarm clock again', a.some((x) => x.clock && near(x.at, T + MIN, slack(r, T) + 1000)), `${bucket()} ${list(a)}`);
       const r2 = await posted(r?.created ?? T, T + MIN + 30_000);
       c(8, 'which comes on time', r2 && r2.created - (T + MIN) < ON_TIME, late(r2, T + MIN));
       await tidy();
@@ -867,11 +930,14 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
 
     await group(11, 'the experience test', async () => {
       launch();
+      await until(() => line('doses ') && line('events '), 8000, 700);
       const before = `${line('doses ')}|${line('events ')}`;
       await press('Test notify');
-      const armed = alarms();
+      // The press reaches the engine through the app's call a moment later: waited for.
+      const soon = (as) => as.some((a) => a.exact && a.at > deviceNow() - 2000 && a.at - deviceNow() < 10_000);
+      const armed = (await until(() => { const as = alarms(); return soon(as) ? as : null; }, 5000, 400)) ?? alarms();
       home();
-      c(11, 'its wait is an exact alarm of its own', armed.some((a) => a.exact && a.at > deviceNow() - 2000 && a.at - deviceNow() < 10_000), list(armed));
+      c(11, 'its wait is an exact alarm of its own', soon(armed), list(armed));
       const t = await until(() => records().find(isTest), 16000, 700);
       shot('11-test-notify.png');
       c(11, 'its notification step posts on her channel, with "Stop" and a public version', t && remindChannel(t) && t.actions.includes(TEXT.stop) && /publicVersion=Notification/.test(t.raw), t?.raw);
@@ -913,9 +979,18 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const lockedUser = () => /RUNNING_LOCKED/.test(sh('dumpsys user'));
       const again = await until(() => { const a = alarms(); return a.some((x) => x.clock) ? a : null; }, 60_000, 2000) ?? alarms();
       save('12-alarms-after-reboot.txt', again.map((a) => a.block).join('\n\n'));
-      c(12, 'after the reboot, before the first unlock: De novo armed again, and the alarm clock', lockedUser() && (near(code0(again)?.at, T + 3 * MIN) || bootedAt > T + 3 * MIN) && again.some((a) => a.clock && near(a.at, T + 4 * MIN)), `${list(again)} ${lockedUser() ? 'locked' : 'unlocked'}`);
+      const late12 = slack(n1, T);
+      c(12, 'after the reboot, before the first unlock: De novo armed again, and the alarm clock', lockedUser() && (near(code0(again)?.at, T + 3 * MIN, late12) || bootedAt > T + 3 * MIN) && again.some((a) => a.clock && near(a.at, T + 4 * MIN, late12)), `${list(again)} ${lockedUser() ? 'locked' : 'unlocked'}`);
       const n2 = await posted(T + 3 * MIN - 5000, Math.max(T + 3 * MIN, bootedAt) + 30_000);
-      c(12, 'De novo comes before the first unlock, sounding', n2 && lockedUser() && (await sounded(n2)), `${late(n2, T + 3 * MIN)} ${lockedUser() ? 'locked' : 'unlocked'}`);
+      const sounded2 = !!n2 && (await sounded(n2));
+      if (!sounded2) {
+        // What the system did with it before the first unlock: its sound keys, the record's channel, the audio log.
+        const nd = sh('dumpsys notification --noredact');
+        save('12-sound.txt', [nd.split('\n').filter((l) => /mSoundNotificationKey|mVibrateNotificationKey|mDisableNotificationEffects|mSystemReady/i.test(l)).join('\n'),
+          n2?.raw ?? '', sh('dumpsys audio').split('\n').filter((l) => /ringtone|notification|playAsync|USAGE_NOTIFICATION/i.test(l)).slice(-40).join('\n'),
+          logcat().split('\n').filter((l) => /Ringtone|NotifAttention|NotificationService|AudioService|MediaPlayer/i.test(l)).slice(-60).join('\n')].join('\n\n----\n'));
+      }
+      c(12, 'De novo comes before the first unlock, sounding', n2 && lockedUser() && sounded2, `${late(n2, T + 3 * MIN)} ${lockedUser() ? 'locked' : 'unlocked'} ${soundKey()}`);
       const ring = await until(() => playing(), Math.max(T + 4 * MIN, bootedAt) + 30_000 - deviceNow(), 500);
       const log = logcat();
       save('12-logcat.txt', log.split('\n').filter((l) => /pinkoo|MediaPlayer|FGS/i.test(l)).join('\n'));

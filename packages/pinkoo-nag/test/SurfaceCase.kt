@@ -31,7 +31,7 @@ internal abstract class SurfaceCase {
     protected val nm: NotificationManager get() = app.getSystemService(NotificationManager::class.java)
     protected fun at(local: String) = LocalDateTime.parse(local).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
     protected var clock = 0L
-    /** What the surface told the core ([Told]): `stopped <nag> <why>`, `nested <nag>`. */
+    /** What the surface told the core ([Told]): `stopped <nag> <why>`, `nested <nag>`, `unlocked`. */
     protected val told = ArrayList<String>()
     private val services = ArrayList<ServiceController<NagService>>()
     private var starts = 0
@@ -130,6 +130,7 @@ internal abstract class SurfaceCase {
         told.clear()
         Told.stopped = { _, nag, why -> told += "stopped $nag $why" }
         Told.nested = { _, nag -> told += "nested $nag" }
+        Told.unlocked = { _ -> told += "unlocked" }
     }
 
     @After fun tearDownSurface() {

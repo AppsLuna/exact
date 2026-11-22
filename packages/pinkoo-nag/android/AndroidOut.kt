@@ -90,7 +90,9 @@ internal class AndroidOut(private val c: Context, given: Plan? = null) : Out {
 
     override fun waitUnlock(until: Long?) {
         val plan = plan
-        Unlock.wait(c, until, now()) { last?.groups?.firstOrNull()?.let { Shade.opening(c, plan, it, "unlock") } }
+        Unlock.wait(c, until, now(), opened = { ctx -> Told.unlocked(ctx.applicationContext) }) {
+            last?.groups?.firstOrNull()?.let { Shade.opening(c, plan, it, "unlock") }
+        }
         NagService.words = plan.texts.service
         NagService.sync(c)
     }
@@ -111,11 +113,16 @@ internal object Told {
     /** The bubble of [nag] dragged into the nest: it stays away for its step, across a process death; no ignore. */
     @Volatile var nested: (Context, Int) -> Unit = DEFAULT_NESTED
 
+    /** Her first unlock after the full screen opened the nag route: the wait is done for that step, across a refresh
+     * and a process death (once per dose, item 12), as when the nag screen shows the dose. */
+    @Volatile var unlocked: (Context) -> Unit = DEFAULT_UNLOCKED
+
     private val DEFAULT_STOPPED: (Context, Int, String) -> Unit get() = { c, _, why ->
         if (why == "cap") Engine.ringOut(c, Engine.clock()) else Engine.silenced(c, why)
     }
     private val DEFAULT_NESTED: (Context, Int) -> Unit get() = { c, nag -> Engine.bubbleClosed(c, nag) }
+    private val DEFAULT_UNLOCKED: (Context) -> Unit get() = { c -> Engine.unlocked(c) }
 
     /** The core's own entry points again (after a test). */
-    fun reset() { stopped = DEFAULT_STOPPED; nested = DEFAULT_NESTED }
+    fun reset() { stopped = DEFAULT_STOPPED; nested = DEFAULT_NESTED; unlocked = DEFAULT_UNLOCKED }
 }
