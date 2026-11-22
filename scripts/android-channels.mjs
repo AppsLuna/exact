@@ -2,9 +2,10 @@
 // the channels the bake resolved (`reach.androidChannels`, `bake/src/channels.rs`) as a list the host reads
 // (`xml/exact_channels.xml`, `Channels.kt`), their names and descriptions as string resources per strings table,
 // their sounds in `res/raw`, the status bar's small icon from the manifest's `monochrome` icon, and Firebase's
-// options from `google-services.json` for an app that pushes.
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, extname, resolve } from 'node:path';
+// options from `google-services.json` for an app that pushes. Beside them, `host.android.rawSounds` in `res/raw` for
+// the channels and players the app's packages make at runtime.
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { pickIcon, placeRgba, readPng, resize } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 
@@ -67,14 +68,35 @@ export function googleServices(dir, id, path) {
   return null;
 }
 
+/** `host.android.rawSounds` copied into `res/raw` under their base names, which the schema holds to resource names:
+ * the sounds a channel made in code plays (a channel's sound must be a resource SystemUI can open,
+ * `android.resource://<package>/raw/<name>`; an asset has no such address) or a player reads, before the first unlock
+ * too. Refuses a file that isn't there and two files with one resource name. The names written. */
+export function rawSounds(manifest, dir, res) {
+  const names = new Map();
+  for (const file of manifest?.host?.android?.rawSounds ?? []) {
+    const name = basename(file).replace(/\.[^.]+$/, '');
+    if (names.has(name)) throw new Error(`host.android.rawSounds: ${names.get(name)} and ${file} are both res/raw/${name}`);
+    if (!existsSync(resolve(dir, file))) throw new Error(`host.android.rawSounds: ${file} is not a file in the app's directory`);
+    names.set(name, file);
+  }
+  for (const file of names.values()) {
+    mkdirSync(resolve(res, 'raw'), { recursive: true });
+    copyFileSync(resolve(dir, file), resolve(res, 'raw', basename(file)));
+  }
+  return [...names.keys()];
+}
+
 /** Writes the notification resources under `res` (emptied first) and returns what the build says: `null` when the
- * app grants no notifications (`channels` absent), else `{ icon }`, whether the manifest gave a small icon. `channels`
+ * app grants no notifications (`channels` absent), else `{ icon }`, whether the manifest gave a small icon. The raw
+ * sounds (`rawSounds`) are written either way. `channels`
  * is the bake's `reach.androidChannels`; `locales` and `base` its strings tables'; `firebase` is `googleServices`'
  * values, for an app that pushes. Without a `monochrome` icon, `exact_notification` is the platform's generic glyph,
  * so the drawable is there for every app that grants notifications and a manifest fragment can name it (Firebase's
  * `default_notification_icon`). */
 export function androidNotificationResources(manifest, dir, res, { channels, locales, base, firebase = null }) {
   rmSync(res, { recursive: true, force: true });
+  rawSounds(manifest, dir, res);
   if (!Array.isArray(channels)) return null;
   const write = (path, text) => { mkdirSync(dirname(resolve(res, path)), { recursive: true }); writeFileSync(resolve(res, path), text); };
   const strings = new Map();

@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { androidNotificationResources, googleServices, resourceText, valuesDirectory } from './android-channels.mjs';
+import { androidNotificationResources, googleServices, rawSounds, resourceText, valuesDirectory } from './android-channels.mjs';
+import { validate } from './app.mjs';
 import { readPng } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 
@@ -42,6 +43,38 @@ test('declared channels become a list, strings per table and raw sounds, with th
   // An app that grants no notifications has none of it, and what a previous build wrote is gone.
   assert.equal(androidNotificationResources({}, dir, res, { channels: undefined }), null);
   assert.deepEqual(files(res), []);
+}));
+
+test("host.android.rawSounds go to res/raw under their base names, for channels made at runtime, with or without the notification grant", () => inDir((dir) => {
+  mkdirSync(resolve(dir, 'assets/sounds'), { recursive: true });
+  for (const name of ['chime.ogg', 'knock_2.wav', 'Alert.OGG']) writeFileSync(resolve(dir, 'assets/sounds', name), name);
+  writeFileSync(resolve(dir, 'assets/Alert.WAV'), 'RIFF');
+  const res = resolve(dir, 'res'), manifest = { host: { android: { rawSounds: ['assets/sounds/chime.ogg', 'assets/sounds/knock_2.wav'] } } };
+  const channels = [{ id: 'urgencies', name: { en: 'Urgencies' }, description: null, importance: 'high', sound: 'assets/Alert.WAV' }];
+  assert.deepEqual(androidNotificationResources(manifest, dir, res, { channels, locales: ['en'], base: 'en' }), { icon: false });
+  // Beside a declared channel's own sound, the bytes as they are.
+  assert.deepEqual(files(res).filter((f) => f.startsWith('raw/')), ['raw/chime.ogg', 'raw/exact_channel_urgencies.wav', 'raw/knock_2.wav']);
+  assert.equal(readFileSync(resolve(res, 'raw/knock_2.wav'), 'utf8'), 'knock_2.wav');
+  // An app that grants no notifications still ships them (a player may read them), and nothing else.
+  assert.equal(androidNotificationResources(manifest, dir, res, { channels: undefined }), null);
+  assert.deepEqual(files(res), ['raw/chime.ogg', 'raw/knock_2.wav']);
+  // None declared, none written.
+  assert.deepEqual(rawSounds({ host: { android: {} } }, dir, resolve(dir, 'none')), []);
+  assert.equal(existsSync(resolve(dir, 'none')), false);
+
+  // A missing file and two files with one resource name are refused.
+  assert.throws(() => rawSounds({ host: { android: { rawSounds: ['assets/sounds/gone.ogg'] } } }, dir, res), /host.android.rawSounds: assets\/sounds\/gone.ogg is not a file in the app's directory/);
+  writeFileSync(resolve(dir, 'assets/chime.mp3'), 'ID3');
+  assert.throws(() => rawSounds({ host: { android: { rawSounds: ['assets/sounds/chime.ogg', 'assets/chime.mp3'] } } }, dir, res), /assets\/sounds\/chime.ogg and assets\/chime.mp3 are both res\/raw\/chime/);
+
+  // The schema holds each to a file in the app's directory named as a resource, outside Exact's own names.
+  const schema = JSON.parse(readFileSync(resolve(import.meta.dir, 'app.schema.json'), 'utf8'));
+  const problems = (list) => validate({ rawSounds: list }, schema.properties.host.properties.android, 'host.android', schema);
+  assert.deepEqual(problems(['assets/sounds/chime.ogg', 'knock_2.wav', 'a/b/c9.mp3']), []);
+  for (const bad of ['assets/sounds/Alert.OGG', 'assets/my-sound.ogg', 'assets/9lives.ogg', '/abs/chime.ogg', '../chime.ogg', 'assets/../chime.ogg', './chime.ogg', 'assets/exact_channel_x.ogg', 'assets/chime.flac', 'assets/sounds/']) {
+    assert.equal(problems([bad]).length, 1, bad);
+  }
+  assert.match(problems(['x.m4a'])[0], /^host.android.rawSounds\[0\]: "x.m4a" does not match/);
 }));
 
 test('the small icon is the monochrome glyph trimmed into 22 of 24 dp per density, drawn white by its alpha', () => inDir((dir) => {

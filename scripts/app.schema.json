@@ -1208,6 +1208,11 @@
             "linkScope": {
               "description": "The path inside `scope` that `handle_links: \"preferred\"` claims on app.origin on Android, as `/invites/`: the App Link filter's own path, so only links under it open the app and the rest of the scope stays in the browser on every release. Absent: the scope. Apple's claim is the domain; its paths are the origin's `apple-app-site-association`.",
               "type": "string"
+            },
+            "rawSounds": {
+              "description": "Sound files the APK carries in `res/raw` for what the app's packages make or play at runtime: a notification channel made in code, whose sound must be an address SystemUI can open (`android.resource://<package>/raw/<name>`; an asset has none, and a raw file is readable before the first unlock), or a player. As `[\"assets/sounds/chime.ogg\"]`: an .ogg, .mp3 or .wav file in the app's directory whose base name is its resource name (a lowercase letter, then lowercase letters, digits and `_`, not starting with `exact_`, one file per name). `notificationChannels` carry their own sounds. Changing them requires a new native build.",
+              "type": "array",
+              "items": { "type": "string", "pattern": "^(?!/)(?!(.*/)?\\.\\.?/)([^/]+/)*(?!exact_)[a-z][a-z0-9_]*\\.(ogg|mp3|wav)$" }
             }
           },
           "additionalProperties": false
