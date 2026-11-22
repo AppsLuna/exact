@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.AlarmManager
 import android.app.KeyguardManager
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.Intent
 import android.media.AudioManager
 import android.media.RingtoneManager
@@ -79,7 +80,7 @@ internal class NagModuleTest : SurfaceCase() {
     private fun test(): android.service.notification.StatusBarNotification? = shown(Shade.TEST)
     private fun rehearsal(step: String, after: Long = 0, quiet: Boolean = false, sound: String = "kalimba") = JSONObject()
         .put("step", step).put("after", after).put("quiet", quiet).put("title", "Pinkoo test").put("body", "This is how I remind you")
-        .put("line", "Here I am!").put("publicTitle", "Pinkoo · Reminder test").put("stop", "Stop").put("channel", "Reminder · Kalimba")
+        .put("line", "Here I am!").put("publicTitle", "Pinkoo · Reminder test").put("stop", "Stop").put("channel", if (quiet) "Reminder · Vibrate only" else "Reminder · Kalimba")
         .put("mascot", mascot("#FF7A59")).put("sound", sound).put("volume", 0.6).put("route", "/nag/test?via=test&step=$step")
     private fun rehearseAlarms() = shadowOf(alarmManager).scheduledAlarms.filter { shadowOf(it.operation).savedIntent.action == Rehearsal.ACTION }
 
@@ -309,9 +310,11 @@ internal class NagModuleTest : SurfaceCase() {
         // "Parar".
         NagReceiver().onReceive(app, shadowOf(n.actions[0].actionIntent).savedIntent)
         assertNull(test())
-        // "Testar sem som": the "Só vibrar" channel, since a channel's sound is fixed.
+        // "Testar sem som": the "Só vibrar" channel, since a channel's sound is fixed, named as the app says even with
+        // no plan yet (Android lists it by that name).
         send("rehearse", rehearsal("notify", quiet = true))
         assertEquals("pinkoo.remind.vibrate", test()!!.notification.channelId)
+        assertEquals("Reminder · Vibrate only", app.getSystemService(NotificationManager::class.java).getNotificationChannel("pinkoo.remind.vibrate").name.toString())
         send("stopRehearsal", JSONObject())
         assertNull(test())
     }

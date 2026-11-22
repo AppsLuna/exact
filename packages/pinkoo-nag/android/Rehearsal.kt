@@ -137,9 +137,9 @@ internal object Rehearsal {
 
     private fun fire(c: Context, phase: String, a: Ask) {
         when (phase) {
-            // The test's channel is named as the app says; "Só vibrar"'s by the plan, when there is one.
+            // The test's channel is named as the app says; "Só vibrar"'s by the plan when the app names none.
             "notify", "inUse" -> notify(c, a, Remind.ensure(c, a.notifySound,
-                if (a.quiet) Store.plan(c)?.texts?.channels?.get("vibrate") else a.channel.ifEmpty { null }), fullScreen = false)
+                a.channel.ifEmpty { null } ?: if (a.quiet) Store.plan(c)?.texts?.channels?.get("vibrate") else null), fullScreen = false)
             "full" -> notify(c, a, Shade.CH_NAG, fullScreen = true)
             "bubble" -> {
                 val app = c.applicationContext

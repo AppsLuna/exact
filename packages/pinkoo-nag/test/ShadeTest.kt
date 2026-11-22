@@ -346,6 +346,16 @@ internal class ShadeTest : SurfaceCase() {
         assertEquals("Lembrete · Sininho", nm.getNotificationChannel("pinkoo.remind.sininho").name.toString())
     }
 
+    /** A medication with no dose in the plan's days still names its channel in the texts: the channel stays (with
+     * whatever she changed in Android), and isn't made for it until a dose names it. */
+    @Test fun aChannelHerMedicationsStillNameStaysWithoutADose() {
+        Shade.channels(app, plan(dose("a@2026-11-18T08:00", "2026-11-18T08:00"), dose("b@2026-11-18T09:00", "2026-11-18T09:00", sound = "kalimba")))
+        assertNotNull(nm.getNotificationChannel("pinkoo.remind.kalimba"))
+        // Only sininho's doses now; texts() still names kalimba's channel.
+        Shade.channels(app, plan(dose("a@2026-11-18T08:00", "2026-11-18T08:00")))
+        assertNotNull("named by her medications, kept", nm.getNotificationChannel("pinkoo.remind.kalimba"))
+    }
+
     /**
      * A channel she blocked or changed in Android is never remade under a new id: making it again keeps her settings,
      * and Como eu te lembro reads it back. "Voltar pro {som}" (`renewNagChannel`) makes a new version as Pinkoo sets it,

@@ -203,7 +203,9 @@ internal object Shade {
         runCatching { if (nm(c).getNotificationChannel(CH_RING_GONE) != null) nm(c).deleteNotificationChannel(CH_RING_GONE) }
         val sounds = sounds(plan)
         for (s in sounds) Remind.ensure(c, s, plan.texts.channels[s])
-        Remind.prune(c, sounds)
+        // Kept while the plan names it, by a dose or by her medications' channel names: a medication with no dose in
+        // the plan's days keeps the channel she may have changed in Android.
+        Remind.prune(c, sounds + plan.texts.channels.keys.filter { it.isNotEmpty() })
     }
 
     fun blocked(c: Context): Boolean = nm(c).getNotificationChannel(CH_NAG)?.importance == NotificationManager.IMPORTANCE_NONE
