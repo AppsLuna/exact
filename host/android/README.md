@@ -632,12 +632,13 @@ names one (`agent-android.mjs` `androidLaunch`).
 
 From Android 12 the starting window shows the launcher icon on that colour, as the platform has it; before 12 the
 window has no icon. `host.android.launchImage` replaces the icon with a picture, as iOS's launch screen has one: from
-Android 12 it is the starting window's icon (`windowSplashScreenAnimatedIcon`), a layer list with the picture at
-108/192 of its `width`, because the platform lays the drawable out as an adaptive icon's 108 dp layer and shows that
-layer 192 dp wide, cut to a circle that wide on stock Android (measured on Android 16 and 17 emulators and an Android 14
-phone, whose HyperOS does not cut it; the documented "288 dp within a 192 dp circle" draws it at two thirds of its
-width). Before 12 the picture, at its `width`, is a layer of the window's background. `false` makes the icon
-transparent. The starting window still goes when the first frame is drawn (`ExactActivity` `Splash`): on a phone
+Android 12 it is the starting window's icon (`windowSplashScreenAnimatedIcon`), a one-frame animation list (0 ms) with
+the picture at its `width` in its middle. The platform draws a still icon once into a bitmap 108 dp across and shows that
+bitmap 192 dp wide, enlarged 1.78 times, which blurred the picture beside the app's first frame on a 300 dpi phone; an
+`Animatable` one it draws live, as an adaptive icon's foreground 288 dp across round the 192 dp icon, cut to a circle
+that wide on stock Android (HyperOS does not cut it). The picture is written for each density (mdpi to xxxhdpi), shrunk
+by area and never enlarged, so the screen draws it at about its own pixels. Before 12 the picture, at its `width`, is a
+layer of the window's background. `false` makes the icon transparent. The starting window still goes when the first frame is drawn (`ExactActivity` `Splash`): on a phone
 (Android 14) no frame of the colour alone came between the picture and the first frame.
 
 ## The channel out (LLP 1115.001 D5)

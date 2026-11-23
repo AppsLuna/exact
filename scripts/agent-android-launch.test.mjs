@@ -82,12 +82,19 @@ test('host.android.launchImage is the starting window\'s icon from Android 12 an
   assert.equal(made.theme, '@style/ExactAppLaunch');
   // The picture's file and digest, for the APK's record of its sources.
   assert.deepEqual(made.files, [{ file: path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }]);
-  // At xxxhdpi's 4 px a dp, never enlarged: 160 dp is 640 px, the height following.
-  const picture = readPng(resolve(res, 'drawable-nodpi/exact_launch_picture.png'));
-  assert.deepEqual([picture.width, picture.height], [640, 320]);
-  // Android 12's icon is laid out at 108/192 of the size it shows: 160 dp shows as 90 dp laid out.
+  // Each density's own file, by area, the height following: 160 dp is 160 px at mdpi and 640 px at xxxhdpi.
+  const sizes = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'].map((density) => {
+    const picture = readPng(resolve(res, `drawable-${density}/exact_launch_picture.png`));
+    return [picture.width, picture.height];
+  });
+  assert.deepEqual(sizes, [[160, 80], [240, 120], [320, 160], [480, 240], [640, 320]]);
+  assert.equal(existsSync(resolve(res, 'drawable-nodpi')), false);
+  // Android 12 draws an Animatable icon live, at the screen's pixels; a still one it draws 108 dp wide and enlarges
+  // to 192 dp. So the icon is one frame of 0 ms, the picture at its width in its middle.
   const icon = readFileSync(resolve(res, 'drawable/exact_launch_icon.xml'), 'utf8');
-  assert.match(icon, /<item android:width="90dp" android:height="45dp" android:gravity="center" android:drawable="@drawable\/exact_launch_picture" \/>/);
+  assert.match(icon, /<animation-list xmlns:android="[^"]+" android:oneshot="true">\n    <item android:duration="0">\n        <layer-list>\n/);
+  assert.match(icon, /<item android:width="160dp" android:height="80dp" android:gravity="center" android:drawable="@drawable\/exact_launch_picture" \/>/);
+  assert.equal(icon.match(/<item /g).length, 2);
   assert.match(read(res, 'values-v31'), /android:windowSplashScreenAnimatedIcon">@drawable\/exact_launch_icon/);
   assert.match(read(res, 'values-v31'), /android:windowBackground">@color\/exact_launch/);
   // Before Android 12, the window's background: the colour with the picture at its own size centred on it.
@@ -100,7 +107,9 @@ test('a launch picture without background_color sits on the platform\'s surface,
   const res = resolve(dir, 'res');
   png(dir, 100, 100);
   assert.equal(androidLaunch({ host: { android: { launchImage: { src: 'logo.png', width: 120 } } } }, res, dir).theme, '@style/ExactAppLaunch');
-  assert.equal(readPng(resolve(res, 'drawable-nodpi/exact_launch_picture.png')).width, 100);
+  // 120 dp is more than its 100 px at mdpi already: that density takes it as it is, and none denser is written.
+  assert.equal(readPng(resolve(res, 'drawable-mdpi/exact_launch_picture.png')).width, 100);
+  assert.equal(existsSync(resolve(res, 'drawable-hdpi')), false);
   assert.match(readFileSync(resolve(res, 'drawable/exact_launch_window.xml'), 'utf8'), /<item android:drawable="\?android:attr\/colorBackground" \/>/);
   assert.match(readFileSync(resolve(res, 'drawable-night/exact_launch_window.xml'), 'utf8'), /<item android:drawable="\?android:attr\/colorBackground" \/>/);
   for (const v31 of ['values-v31', 'values-night-v31']) assert.doesNotMatch(read(res, v31), /windowSplashScreenBackground|windowBackground|windowLightStatusBar/);

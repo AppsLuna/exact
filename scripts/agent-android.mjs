@@ -940,11 +940,13 @@ const lightColour = (css) => {
   return (y > 0.008856 ? 116 * Math.cbrt(y) - 16 : 903.3 * y) > 49;
 };
 
-/** How much smaller than it shows Android 12's starting window lays its icon drawable out: as an adaptive icon's
- * 108 dp layer, shown 192 dp wide where no icon background is set (and, on stock Android, cut to a circle that wide).
- * The documented "288 dp, fit in a 192 dp circle" drew a picture at two thirds of its width; this factor was measured
- * on an Android 16 emulator, an Android 14 phone (HyperOS, which does not cut it) and an Android 17 emulator. */
-const SPLASH_ICON_SCALE = 108 / 192;
+/** Android's densities, in px a dp, each with the launch picture shrunk to it by area. Android 12's starting window
+ * (the shell's `SplashscreenIconDrawableFactory`) draws a still icon once into a bitmap 108 dp across and shows it
+ * 192 dp wide, enlarged 1.78 times, so any picture blurs (on a 300 dpi phone it showed its pixels beside the app's
+ * first frame). An `Animatable` icon is drawn live instead, as an adaptive icon's foreground 288 dp across round the
+ * 192 dp icon, cut to its mask (a circle on stock Android, not on HyperOS): so the icon is a one-frame `animation-list`
+ * with the picture at its `width` in its middle, its frame 0 ms so the platform's own exit waits for nothing. */
+const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
 
 /** The launch window in the app's first-frame background (LLP 1115.001 D3.6): each scheme's launch colour the manifest
  * names (`schemeColours`, LLP 1163 D2), as the iOS launch screen and the web page's first paint take them, clipped to
@@ -954,8 +956,8 @@ const SPLASH_ICON_SCALE = 108 / 192;
  * page's (`ExactActivity.chrome`). A scheme the manifest names none for keeps the reader's: `ExactAppLaunch` is
  * written for each scheme (`values`, `values-night`), with the colour only in the one that names it, since a colour
  * resource cannot name the theme's surface. Android 12's starting window shows the launcher icon unless
- * `host.android.launchImage` says otherwise: a picture (`{ src, width }`) is that icon, laid out at
- * [SPLASH_ICON_SCALE] of its `width`, and before Android 12 it is centred on the window's background, which has no
+ * `host.android.launchImage` says otherwise: a picture (`{ src, width }`) is that icon, at its `width` and drawn at
+ * the screen's own pixels ([DENSITIES]), and before Android 12 it is centred on the window's background, which has no
  * icon; `false` shows no icon. `dir` is the app's, which the picture's path is relative to. Returns the activity's
  * theme, null where the manifest says neither, which leaves the platform's own launch, and the picture's file and
  * digest for the APK's record of its sources. */
@@ -976,15 +978,18 @@ export function androidLaunch(manifest, res, dir = '.') {
   if (picture) {
     const source = resolve(dir, image.src);
     files.push({ file: source, sha256: createHash('sha256').update(readFileSync(source)).digest('hex') });
-    // At up to xxxhdpi's 4 px a dp, never enlarged, its height following its aspect.
-    const px = Math.min(picture.width, Math.round(image.width * 4));
-    write('drawable-nodpi/exact_launch_picture.png', encodePng(resize(picture, px, Math.max(1, Math.round(picture.height * px / picture.width)))));
-    const size = (scale) => `android:width="${+(image.width * scale).toFixed(2)}dp" android:height="${+(image.width * picture.height / picture.width * scale).toFixed(2)}dp"`;
-    const layers = (items) => `<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n${items}</layer-list>\n`;
-    write('drawable/exact_launch_icon.xml', layers(`    <item ${size(SPLASH_ICON_SCALE)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
+    // Each density's file, its height following its aspect, never enlarged: the first the picture cannot fill takes it
+    // as it is, and a denser screen scales that one as it loads it
+    for (const [density, scale] of Object.entries(DENSITIES)) {
+      const px = Math.min(picture.width, Math.round(image.width * scale));
+      write(`drawable-${density}/exact_launch_picture.png`, encodePng(px === picture.width ? picture : resize(picture, px, Math.max(1, Math.round(picture.height * px / picture.width)))));
+      if (px === picture.width) break;
+    }
+    const centred = `android:width="${+image.width.toFixed(2)}dp" android:height="${+(image.width * picture.height / picture.width).toFixed(2)}dp" android:gravity="center" android:drawable="@drawable/exact_launch_picture"`;
+    const ns = 'xmlns:android="http://schemas.android.com/apk/res/android"';
+    write('drawable/exact_launch_icon.xml', `<animation-list ${ns} android:oneshot="true">\n    <item android:duration="0">\n        <layer-list>\n            <item ${centred} />\n        </layer-list>\n    </item>\n</animation-list>\n`);
     for (const s of ['light', 'dark']) {
-      write(`drawable${qualifier[s]}/exact_launch_window.xml`, layers(`    <item android:drawable="${colour(s) ? '@color/exact_launch' : '?android:attr/colorBackground'}" />\n` +
-        `    <item ${size(1)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
+      write(`drawable${qualifier[s]}/exact_launch_window.xml`, `<layer-list ${ns}>\n    <item android:drawable="${colour(s) ? '@color/exact_launch' : '?android:attr/colorBackground'}" />\n    <item ${centred} />\n</layer-list>\n`);
     }
   }
   const item = (name, value) => `        <item name="android:${name}">${value}</item>`;
