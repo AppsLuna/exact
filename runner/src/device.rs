@@ -674,12 +674,17 @@ pub const DEVICES: &[Device] = &[
     // package owns the app's one exact-alarm permission, needs notifications
     // for the ring's Stop, and runs receivers and a ringing service at a
     // boot and at the alarm's time; macOS, tvOS and the web have no alarm.
+    // pinkoo (C12): `USE_EXACT_ALARM`, granted at install from Android 13,
+    // with `SCHEDULE_EXACT_ALARM` up to Android 12L, as Play's alarm apps
+    // declare them; upstream declares `SCHEDULE_EXACT_ALARM` alone. Revert
+    // this commit if Play refuses the declaration.
     Device {
         name: "alarms",
         sandbox: Some(sandbox::NONE),
         ios: &["NSAlarmKitUsageDescription"],
         android: &[
-            "android.permission.SCHEDULE_EXACT_ALARM",
+            "android.permission.USE_EXACT_ALARM",
+            "android.permission.SCHEDULE_EXACT_ALARM maxSdkVersion=32",
             "android.permission.POST_NOTIFICATIONS",
             "android.permission.RECEIVE_BOOT_COMPLETED",
             "android.permission.WAKE_LOCK",

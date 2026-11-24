@@ -55,9 +55,10 @@ try {
   check('android', 'the roster binds the implementation', roster.includes('"alarms" to { c -> exact.alarms.AlarmsModule(c) }'), roster);
   const merged = existsSync(out) && readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
   const xml = merged ? readFileSync(resolve(out, merged), 'utf8') : '';
-  const permissions = ['SCHEDULE_EXACT_ALARM', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SYSTEM_EXEMPTED'];
+  const permissions = ['USE_EXACT_ALARM', 'SCHEDULE_EXACT_ALARM', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SYSTEM_EXEMPTED'];
   const missing = permissions.filter((p) => !new RegExp(`<uses-permission\\s+android:name="android\\.permission\\.${p}"`).test(xml));
-  check('android', 'device.alarms derives its six permissions, and not USE_EXACT_ALARM', !missing.length && !xml.includes('USE_EXACT_ALARM'), `missing ${missing.join(', ')}`);
+  // pinkoo (C12): USE_EXACT_ALARM, with SCHEDULE_EXACT_ALARM only up to Android 12L.
+  check('android', 'device.alarms derives its seven permissions, SCHEDULE_EXACT_ALARM up to API 32', !missing.length && /SCHEDULE_EXACT_ALARM"\s+android:maxSdkVersion="32"/.test(xml), `missing ${missing.join(', ')}`);
   const element = (tag, cls) => xml.match(new RegExp(`<${tag}[^>]*android:name="exact\\.alarms\\.${cls}"[^>]*>`))?.[0] ?? '';
   const service = element('service', 'AlarmService'), ring = element('receiver', 'AlarmReceiver'), system = element('receiver', 'AlarmSystemReceiver');
   check('android', 'the fragment merged: two receivers and the service, none exported, each directBootAware',

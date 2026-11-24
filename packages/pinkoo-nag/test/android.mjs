@@ -87,7 +87,7 @@ try {
   check('android', 'the roster binds the implementation, made at load', roster.includes('"nag" to { c -> pinkoo.nag.NagModule(c) }') && /startAtLoad[^\n]*"nag"/.test(roster), roster);
   const merged = existsSync(build) && readdirSync(build, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
   const xml = merged ? readFileSync(resolve(build, merged), 'utf8') : '';
-  const permissions = ['SCHEDULE_EXACT_ALARM', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
+  const permissions = ['USE_EXACT_ALARM', 'SCHEDULE_EXACT_ALARM', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_SYSTEM_EXEMPTED',
     'USE_FULL_SCREEN_INTENT', 'SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE_SPECIAL_USE', 'POST_PROMOTED_NOTIFICATIONS', 'VIBRATE'];
   const missing = permissions.filter((p) => !new RegExp(`<uses-permission\\s+android:name="android\\.permission\\.${p}"`).test(xml));
   check('android', 'the grants and the fragment derive every permission the engine uses', !missing.length, `missing ${missing.join(', ')}`);
