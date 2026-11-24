@@ -11,7 +11,10 @@
 // - Tela cheia: armed at the screen's turning off plus 5 s, opening the nag route in test mode over the keyguard; with
 //   no screen-off within 15 s, the step as with the phone in use (her sound, a heads-up).
 // - Alarme: the ring service started while Pinkoo still shows, the sample at most 10 s, with the alarm's public
-//   notification and "Parar"; the stop contract's screen signals count only once its sound started.
+//   notification and "Parar"; the stop contract's screen signals count only once its sound started. As the real alarm
+//   (Glauco, 2026-11-24), the notification carries the full-screen intent to the app's route (the nag route in test
+//   mode) whenever the access is granted: on a locked or dark phone ("Em 5 s, pra eu bloquear") the screen turns on and
+//   the route opens over the keyguard, ringing until her first touch.
 //
 // The previews play only in front, so Android allows them: `SoundPool` for the short presets (a `MediaPlayer` takes
 // hundreds of ms to prepare on the A06, too slow for tap-to-hear), `USAGE_NOTIFICATION` for reminder sounds (muted on
@@ -157,8 +160,9 @@ internal object Rehearsal {
                 holding = false
                 // A real alarm ringing meanwhile wins: the test gives way.
                 if (NagService.ring?.test == false) return stop(c, "alarm")
-                NagService.ring = NagService.Companion.Ring(NAG, a.sound, a.volume, NagService.TEST_MS, test = true)
-                alarmNotice(c, a)
+                val wakes = FullScreen.allowed(c)
+                NagService.ring = NagService.Companion.Ring(NAG, a.sound, a.volume, NagService.TEST_MS, test = true, wakes = wakes)
+                alarmNotice(c, a, wakes)
                 NagService.sync(c)
             }
         }
@@ -184,8 +188,9 @@ internal object Rehearsal {
         Shade.notify(c, Shade.TEST, b.build())
     }
 
-    /** The alarm sample's notification: the alarm's, public with "Parar". */
-    private fun alarmNotice(c: Context, a: Ask) {
+    /** The alarm sample's notification: the alarm's, public with "Parar", and with [fullScreen] the full-screen intent
+     * opening [Ask.route] over the keyguard, as the real alarm's does. */
+    private fun alarmNotice(c: Context, a: Ask, fullScreen: Boolean) {
         val b = Notification.Builder(c, Shade.CH_NAG).setSmallIcon(Shade.icon(c)).setColor(Shade.BRAND)
             .setContentTitle(a.title).setContentText(a.body).setStyle(Notification.BigTextStyle().bigText(a.body))
             .setCategory(Notification.CATEGORY_ALARM).setVisibility(Notification.VISIBILITY_PUBLIC).setOngoing(true)
@@ -193,6 +198,7 @@ internal object Rehearsal {
             .setDeleteIntent(Shade.stop(c, 31, NAG, "swipe", test = true))
             .setContentIntent(Shade.activity(c, 32, Shade.openingAt(c, a.route, overLock = false)))
             .addAction(Notification.Action.Builder(null, a.stop, Shade.stop(c, 30, NAG, "stop", test = true)).build())
+        if (fullScreen) b.setFullScreenIntent(Shade.activity(c, 34, Shade.openingAt(c, a.route, overLock = true)), true)
         Shade.notify(c, Shade.TEST, b.build())
     }
 

@@ -2,7 +2,9 @@
 // `uiautomator` for the app's painted controls and the shade's, and `adb` for the system's state. The fixture's paces
 // are minutes (fixture/app.ts, SCENARIOS). Each check reads what the system says (`dumpsys` alarm, audio, window,
 // notification, activity, batterystats, deviceidle) rather than what the app believes. The gentle reminder
-// (`docs/exact.md` › Planned: the gentle reminder, item 19): time alone moves a dose along its steps.
+// (`docs/exact.md` › The gentle reminder, item 19): time alone moves a dose along its steps. Since 2026-11-24 the alarm's
+// notification carries the full-screen intent every time it rings (Glauco), so the alarm checks expect the route over
+// the keyguard, and an unlock or the screen turning on counts only after the ring's first 5 s (`NagService.WAKE_GRACE_MS`).
 //
 //  1. The thread, every step on, the alarm "Só se passar de tudo", locked with a PIN. The plan arms code 0 exactly
 //     (`setExactAndAllowWhileIdle`, no alarm clock) with an inexact backup beside it, and the alarm clock (code 1) at the
@@ -12,7 +14,7 @@
 //     the face stays. A swipe dismisses the reminder, which stays away through a resume and a changed plan. T+3: Tela
 //     cheia over the PIN keyguard, silent; the bubble gone with its step; the ring service holds the process in the
 //     background, and her first unlock opens the nag route, once. T+5: the alarm rings on the alarm stream, its own
-//     public notification with "Stop" and no medication's name, no second full screen; with the lock screen hiding
+//     public notification with "Stop" and no medication's name, and its full-screen intent; with the lock screen hiding
 //     sensitive content, "Stop" in the locked shade stops it without unlocking. T+6: the first repeat; its "Not now"
 //     turns the post, in place and silently, into the confirmation with the next time, which code 0 then holds, gone
 //     after 5 s and kept away. The next repeats, the last one's "Not now" saying it waits on Today, then nothing more
@@ -21,7 +23,8 @@
 //     no full screen and A's never comes twice; no alarm where it's off; B's own Tela cheia, then B's alarm, which her
 //     unlock stops.
 //  3. "Já na hora": the alarm rings at the dose time with the notification folded into it (only the ring sounds) on a
-//     dark phone, and keeps ringing past its own post; the power key stops it. De novo, then a promise: its countdown
+//     dark phone, turns the screen on with the route over the keyguard, and keeps ringing past its own post and that
+//     wake; the power key stops it. De novo, then a promise: its countdown
 //     (a Live Update on 36.1 and later), nothing else while it runs, the alarm clock at the deadline; there the alarm
 //     rings again, folded, stops at its 60 s cap (logged as its timeout, read by the engine's own answer: the fixture's
 //     "State"), and the thread goes on with a repeat.
@@ -488,7 +491,10 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(1, 'T+5: the alarm rings on the alarm stream ("Só se passar de tudo"), on time', ring && ringAt - (T + 5 * MIN) < ON_TIME, `${((ringAt - T - 5 * MIN) / 1000).toFixed(1)} s`);
       const ap = alarmPost();
       c(1, 'its own notification: public, the alarm category, "Stop", no medication\'s name', ap && ap.vis === 'PUBLIC' && ap.category === 'alarm' && ap.actions.includes(TEXT.stop) && !/Pill/.test(ap.title + ap.text), ap?.raw ?? records().map((r) => r.raw.slice(0, 300)));
-      c(1, 'no second full screen', !records().some((r) => r.fsi && r.created > T + 5 * MIN - 5000) && !ours(), `${top()} ${records().filter((r) => r.fsi).map((r) => `${r.id} ${hhmm(r.created)}`)}`);
+      // Every time the alarm rings, its notification carries the full-screen intent (Glauco, 2026-11-24).
+      const overAlarm = await until(() => ours() && awake() && keyguard().occluded, 15_000, 700);
+      // Only its full-screen intent shows the app over a PIN keyguard; the record may already be refreshed without it.
+      c(1, 'its notification\'s full-screen intent: the route over the PIN keyguard again', !!overAlarm, `${top()} fsi=${ap?.fsi} ${JSON.stringify(keyguard())}`);
       c(1, 'the ring service plays it, in the foreground', serving(), services().slice(0, 300));
       sh('cmd statusbar expand-notifications');
       await wait(1500);
@@ -599,6 +605,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       home();
       await wait(1500);
       c(2, 'leaving the route does not stop it', playing(), null);
+      // Past the ring's first 5 s, in which its full screen's own wake and unlock don't count.
+      await wait(5000);
       await unlock();
       c(2, 'her unlock stops it', await until(() => !playing(), 6000), JSON.stringify(keyguard()));
       stayOn(false);
@@ -620,11 +628,12 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       c(3, 'on its own public notification with "Stop"', ap && ap.vis === 'PUBLIC' && ap.actions.includes(TEXT.stop), ap?.raw);
       const key = soundKey();
       c(3, 'the notification folded into it: none of its posts sounds, only the ring', !records().some((r) => r.key === key), `${key} ${records().map((r) => `${r.id} ${r.channel}`)}`);
-      c(3, 'the phone stays dark: no full screen', !awake() && !ours(), top());
-      await wait(3000);
-      c(3, 'it keeps ringing past its own post', playing(), null);
+      const overT = await until(() => ours() && awake() && keyguard().occluded, 15_000, 700);
+      c(3, 'its full-screen intent turns the screen on and opens the route over the keyguard', !!overT, `${top()} fsi=${ap?.fsi}`);
+      await wait(6000);
+      c(3, 'it keeps ringing past its own post and that wake', playing(), null);
       sh('input keyevent KEYCODE_POWER');
-      c(3, 'the power key on the dark phone stops it', await until(() => !playing(), 5000), null);
+      c(3, 'the power key (the screen going off) stops it', await until(() => !playing(), 5000), null);
       c(3, 'without unlocking', keyguard().showing, JSON.stringify(keyguard()));
       await open();
       const n2 = await posted(T + MIN - 5000, T + MIN + 25_000);
@@ -649,7 +658,9 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       home();
       await wait(3000);
       c(3, 'promised: nothing holds the process', !serving(), services().slice(0, 300));
-      // Dark, so nothing but the cap ends the ring (the screen timing out would count as the power key).
+      // Its full screen turns the screen on and the fixture's route keeps nothing awake: the screen kept on, so nothing
+      // but the cap ends the ring (the screen timing out would count as the power key).
+      stayOn(true);
       sleep();
       const ring2 = await until(() => playing(), deadline + 25_000 - deviceNow(), 500);
       const ring2At = deviceNow();
@@ -659,6 +670,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const quiet = await until(() => !playing(), 80_000, 1000);
       const quietAt = deviceNow();
       c(3, 'unanswered, it stops at its 60 s cap', quiet && quietAt - ring2At > 50_000 && quietAt - deadline < 75_000, `${((quietAt - ring2At) / 1000).toFixed(0)} s`);
+      stayOn(false);
       const r = await posted(deadline + 30_000, deadline + 2 * MIN + 30_000);
       c(3, 'then the thread goes on: a repeat, with her sound and no ring', r && (await sounded(r)) && !playing(), late(r, deadline + 2 * MIN));
       const before3 = `pid ${pid()}\n${sh(`dumpsys activity activities | grep -E "ActivityRecord\\{.*${id}"`)}\n${list(alarms())}`;
@@ -995,6 +1007,8 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       const log = logcat();
       save('12-logcat.txt', log.split('\n').filter((l) => /pinkoo|MediaPlayer|FGS/i.test(l)).join('\n'));
       c(12, 'the alarm rings before the first unlock, audibly', ring && lockedUser() && !/no alarm sound|ring: no sound/i.test(log), lockedUser() ? null : 'the user was unlocked');
+      // Past the ring's first 5 s, in which its full screen's own wake and unlock don't count.
+      await wait(5000);
       await unlock();
       c(12, 'waking the phone to unlock it stops it', await until(() => !playing(), 6000), null);
     });

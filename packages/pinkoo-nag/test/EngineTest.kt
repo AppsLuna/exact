@@ -125,6 +125,7 @@ internal class EngineTest : CoreCase() {
         repeat(3) { deliver(Chain.BACKUP) }
         assertEquals(listOf(Step.NOTIFY, Step.AGAIN, Step.ALARM), out.posts.map { it.step })
         assertFalse("the alarm step as a notification", out.posts.last().alarm)
+        assertFalse("with no full screen of its own", out.posts.last().fullScreen)
         assertTrue(out.posts.last().sounding)
         assertTrue(out.rings.isEmpty())
         assertFalse(Chain.exact(app))
@@ -383,6 +384,38 @@ internal class EngineTest : CoreCase() {
         Engine.resolve(app, listOf("a@2026-11-18T20:00"), "promised", at("2026-11-18T21:00"), at("2026-11-18T20:37"))
         assertEquals(listOf("b@2026-11-18T20:00"), out.refreshes.last().keys)
         assertEquals("kalimba", out.refreshes.last().channel)
+    }
+
+    /**
+     * Glauco, 2026-11-24: the alarm's post brings the full screen every time it rings, "Só se passar de tudo" after Tela
+     * cheia already showed and "Já na hora" at the dose time, and it isn't the dose's Tela cheia, which still comes once
+     * (the surface attaches the intent only with the access, `ShadeTest`).
+     */
+    @Test fun theAlarmBringsTheFullScreenEveryTimeItRings() {
+        val after = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "afterAll")
+        Engine.schedule(app, NagFixtures.plan(after), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:35"))
+        assertTrue("Tela cheia", out.posts.last().let { it.step == Step.FULL && it.fullScreen })
+        run(at("2026-11-18T20:50"))
+        val alarm = out.posts.last()
+        assertEquals(Step.ALARM, alarm.step)
+        assertTrue("after Tela cheia already showed", alarm.alarm && alarm.fullScreen && !alarm.sounding)
+        assertEquals("ring:${alarm.nag}", out.calls.last { it.startsWith("ring:") })
+        // With Tela cheia off, too.
+        NagFixtures.clear(app); out.reset()
+        Engine.schedule(app, NagFixtures.plan(after, fullScreen = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:35"))
+        assertTrue(out.posts.last().let { it.step == Step.ALARM && it.fullScreen })
+        assertTrue("no Tela cheia spent", Store.state(app).doses.values.none { it.full })
+        // "Já na hora": the dose time's notification folded into the ring brings it; Tela cheia still comes, once.
+        NagFixtures.clear(app); out.reset()
+        val onTime = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "onTime")
+        Engine.schedule(app, NagFixtures.plan(onTime), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:00"))
+        assertTrue(out.posts.single().let { it.step == Step.NOTIFY && it.folded && it.alarm && it.fullScreen })
+        assertFalse(Store.state(app).doses.values.single().full)
+        run(at("2026-11-18T20:35"))
+        assertTrue("the dose's Tela cheia, still", out.posts.last().let { it.step == Step.FULL && it.fullScreen && !it.alarm })
     }
 
     /** The bubble at De novo, as long as its step; sent to the nest it stays away for the step, across a process death

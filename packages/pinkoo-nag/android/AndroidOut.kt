@@ -56,7 +56,8 @@ internal class AndroidOut(private val c: Context, given: Plan? = null) : Out {
     override fun clear(nag: Int) = Shade.clear(c)
 
     /** The alarm for [p]: her sound (the dose's, the default preset when it can't sound) at the plan's alarm volume, in
-     * the ring service, up to its cap. Once per nag: a ring she stopped or that rang out never starts again. */
+     * the ring service, up to its cap. Once per nag: a ring she stopped or that rang out never starts again. It wakes
+     * the screen itself when the post it rings with carried the full-screen intent ([Shade.build]). */
     override fun ring(p: Post) {
         val now = NagService.ring
         if (now != null && !now.test && now.nag == p.nag) return
@@ -64,7 +65,8 @@ internal class AndroidOut(private val c: Context, given: Plan? = null) : Out {
         NagService.words = plan.texts.service
         // A test's sample gives way to the real alarm.
         if (now?.test == true) Rehearsal.stop(c, "alarm")
-        NagService.ring = NagService.Companion.Ring(p.nag, p.channel, plan.alarmVolume, NagService.RING_MS, test = false)
+        val wakes = last?.let { it.nag == p.nag && it.alarm && it.fullScreen && !it.front } == true && FullScreen.allowed(c)
+        NagService.ring = NagService.Companion.Ring(p.nag, p.channel, plan.alarmVolume, NagService.RING_MS, test = false, wakes = wakes)
         NagService.sync(c)
     }
 

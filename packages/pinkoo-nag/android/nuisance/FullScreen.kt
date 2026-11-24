@@ -5,6 +5,11 @@
 // it is her reminder posted anew, sounding, as without the access. Either way the dose's full screen is spent (the
 // core counts it). From Android 14 the person (or Play, for an app that is neither a calling nor an alarm app) may take
 // the access away. In front it has none (decision 17): the app opens the nag route itself (`nagState().front`).
+//
+// The alarm's notification carries the same intent every time the alarm rings (`Shade.build`, Glauco 2026-11-24),
+// whenever [allowed]: there [now] isn't asked, since Android itself shows a heads-up to a phone in use, and the alarm
+// passes Do Not Disturb as an alarm (unless she lets it block alarms, when Android holds both). It counts as no Tela
+// cheia.
 package pinkoo.nag
 
 import android.app.KeyguardManager

@@ -1,5 +1,5 @@
 // The gentle reminder's rules over the plan and the state, with no Android in them (`docs/product.md` › Nagging, The
-// pace; `docs/exact.md` › Planned: the gentle reminder, items 1, 2, 6, 14, 15 and 17): which step of its thread a dose
+// pace; `docs/exact.md` › The gentle reminder, items 1, 2, 6, 14, 15 and 17): which step of its thread a dose
 // time is at, what is due, what a fire, "Agora não", a swipe, an opening and a resolution change, what a post carries,
 // and when the next alarms are. Time alone moves a thread along its steps; nothing she does makes it louder. Every
 // outcome a dose has is an event the app records.
@@ -290,7 +290,8 @@ internal object Rules {
             if (rings && !alarms) null else Due(g, due)
         }
 
-    /** What one group's fire was: its step, whether it brings the full screen, and whether it rings the alarm. */
+    /** What one group's fire was: its step, whether it brings Tela cheia (once per dose), and whether it rings the
+     * alarm (whose post brings the full screen too, every time it rings: [post]). */
     class Fire(val group: Group, val step: Step, val fullScreen: Boolean, val rings: Boolean)
 
     /**
@@ -589,15 +590,17 @@ internal object Rules {
     /**
      * The post for [fires] (their number [nag]): the earliest firing group's step, channel (its first dose's sound),
      * face and line; every open dose not under a promise and not dismissed named; the full screen when a firing group
-     * brings it; the alarm while one rings, any step with it folded in, silent; her sound otherwise, but in [front]
-     * (the app plays it) and for the full screen (silent over the lock screen).
+     * enters Tela cheia, and whenever a firing group rings the alarm (Glauco, 2026-11-24: the alarm wakes the screen and
+     * opens the nag route ringing, every time; it isn't the dose's Tela cheia, which stays once per dose); the alarm
+     * while one rings, any step with it folded in, silent; her sound otherwise, but in [front] (the app plays it) and for
+     * the full screen (silent over the lock screen).
      */
     fun post(plan: Plan, st: State, nag: Int, fires: List<Fire>, front: Boolean, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post {
         val lead = fires.minBy { it.group.group }
         val rings = st.groups.values.any { it.state == "ringing" && nagged(plan, st, it).isNotEmpty() }
         val sounds = fires.any { f -> !f.rings && (f.step != Step.FULL || !f.fullScreen) }
         return view(plan, st, nag, lead.group, lead.step, fires.map { it.group.group }.sorted(), now, zone).copy(
-            sounding = sounds && !rings && !front, fullScreen = fires.any { it.fullScreen } && !front, front = front,
+            sounding = sounds && !rings && !front, fullScreen = fires.any { it.fullScreen || it.rings } && !front, front = front,
             title = fill(plan.texts.title, names(plan, st, shown(plan, st)), WallClock.epoch(lead.group.group, zone), zone),
         )
     }

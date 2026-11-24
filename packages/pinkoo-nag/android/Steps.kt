@@ -1,7 +1,7 @@
 // The engine's seam: what the decisions ([Rules], [Engine]) hand to what Android shows and plays ([Out], implemented by
 // `AndroidOut.kt` over `Shade`, `FullScreen`, `Bubble`, `NagService` and `Unlock`). The core decides which step a group
 // is at, what a post carries and when; the surface only shows it. The core's tests run on a fake [Out]; the surface's
-// tests feed [Post] fixtures. `docs/exact.md` › Planned: the gentle reminder, items 1, 4, 9 to 12 and 17.
+// tests feed [Post] fixtures. `docs/exact.md` › The gentle reminder, items 1, 4, 9 to 12 and 17.
 //
 // The other way, the surface tells the core what she did, each a way into [Engine]: the reminder's delete intent
 // (`NagReceiver.DISMISS`, `Engine.dismissed`), its "Agora não" (`NagReceiver.NOT_NOW`, `Engine.notNow`), the stop
@@ -32,12 +32,14 @@ enum class Step { NOTIFY, AGAIN, FULL, ALARM, REPEAT, DEADLINE }
  * - [sounding]: her sound plays with it, posted anew on her reminder channel. False for a refresh; for the alarm and a
  *   step [folded] into it (the ring is the only sound); for the full screen (silent over the lock screen: where the
  *   surface falls back to a heads-up, it sounds it); and in [front] (the app plays her sound itself).
- * - [fullScreen]: a firing group enters Tela cheia and its doses haven't had it (never in [front]). The surface attaches
- *   the full-screen intent only while the phone is locked or dark, Do Not Disturb is off and the access is granted;
- *   otherwise it posts on her reminder channel, sounding. Either way the core has already counted the dose's full
- *   screen.
+ * - [fullScreen]: a firing group enters Tela cheia and its doses haven't had it, or a firing group rings the alarm (never
+ *   in [front]). For Tela cheia the surface attaches the full-screen intent only while the phone is locked or dark, Do
+ *   Not Disturb is off and the access is granted; otherwise it posts on her reminder channel, sounding. Either way the
+ *   core has already counted the dose's full screen. For the alarm, every time it rings, it rides on the alarm's own
+ *   notification whenever the access is granted (Android opens the nag route over a locked or dark phone and shows a
+ *   heads-up to one in use; Do Not Disturb treats it as the alarm it is), and it counts as no Tela cheia.
  * - [alarm]: an alarm rings now (with exact access only): the post is the alarm's own notification (`pinkoo.nag`, public,
- *   "Parar").
+ *   "Parar"), with the full-screen intent when it is the fire that rings ([fullScreen]).
  * - [bubble]: some open group is inside its De novo step with Bolinha on and wasn't sent to the nest.
  * - [folded]: a step rides on the alarm's notification ("Já na hora", a promise's deadline for such a dose, another dose
  *   time's step while it rings): silent, so the ring is the only sound.

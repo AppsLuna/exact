@@ -321,6 +321,50 @@ internal class NuisanceTest : SurfaceCase() {
         assertFalse("its screen signals go with the sound", listens(Intent.ACTION_SCREEN_ON))
     }
 
+    /**
+     * A ring whose post carried the full-screen intent (Glauco, 2026-11-24) knows it wakes the screen: Android turns it
+     * on and opens the nag route a little after the ring starts (later on a slow phone), and with no lock screen that wake
+     * is an unlock too. Neither counts in its first [NagService.WAKE_GRACE_MS]; the screen going off still stops it at
+     * once, and after the grace the power key's wake and the unlock stop it as before.
+     */
+    @Config(sdk = [33]) // full-screen access allowed by default on Android 12 and 13
+    @Test fun aRingThatBringsItsFullScreenIgnoresItsOwnWake() {
+        media(Settings.System.DEFAULT_ALARM_ALERT_URI)
+        phone(locked = true, on = false)
+        val o = out()
+        val p = post(1, Step.ALARM, sounding = false, alarm = true, fullScreen = true)
+        o.post(p)
+        o.ring(post(1, Step.ALARM, sounding = false, alarm = true))
+        serve()
+        assertTrue(NagService.ring!!.wakes)
+        idle(2_000)
+        broadcast(Intent.ACTION_SCREEN_ON)
+        broadcast(Intent.ACTION_USER_PRESENT)
+        assertNotNull("its own wake, even 2 s late, and the no-lock unlock don't count", NagService.ring)
+        idle(NagService.WAKE_GRACE_MS)
+        broadcast(Intent.ACTION_USER_PRESENT)
+        assertNull("after the grace the unlock stops it", NagService.ring)
+        assertEquals(listOf("stopped 1 unlock"), told)
+        // The screen going off stops it at once, grace or not.
+        NagService.rang = 0
+        Shade.forget()
+        nm.cancelAll()
+        o.post(post(2, Step.ALARM, sounding = false, alarm = true, fullScreen = true))
+        o.ring(post(2, Step.ALARM, sounding = false, alarm = true))
+        serve()
+        assertTrue(NagService.ring!!.wakes)
+        broadcast(Intent.ACTION_SCREEN_OFF)
+        assertNull(NagService.ring)
+        assertEquals("stopped 2 power", told.last())
+        // A post without it (no access, or in front) keeps the old second.
+        NagService.rang = 0
+        Shade.forget()
+        nm.cancelAll()
+        o.post(post(3, Step.ALARM, sounding = false, alarm = true, fullScreen = true, front = true))
+        o.ring(post(3, Step.ALARM, sounding = false, alarm = true, front = true))
+        assertFalse(NagService.ring!!.wakes)
+    }
+
     /** Unanswered, it rings out at 60 s: the core hears the cap (its `timeout`), and the core's stop is idempotent. */
     @Test fun itRingsOutAtItsCapAndAStopRingOfNothingDoesNothing() {
         val s = ringing()

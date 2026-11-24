@@ -11,7 +11,11 @@
 // delete intent (broadcasts), opening Pinkoo from it (the app's nag screen tells the core), the unlock
 // (`ACTION_USER_PRESENT`), the power key (`ACTION_SCREEN_OFF`, and `ACTION_SCREEN_ON` once the ring has played about a
 // second, so the post's own wake doesn't count), the route's touch and volume keys (the app), and each cap. The screen
-// receivers exist only while a sound plays, so a screen turned off before it starts stops nothing.
+// receivers exist only while a sound plays, so a screen turned off before it starts stops nothing. A ring whose post
+// carries the full-screen intent ([Ring.wakes]) lets Android turn the screen on and open the nag route over the keyguard
+// a little after it starts (later on a slow phone), and on a phone with no lock screen that wake is also an "unlock": so
+// for such a ring neither the screen turning on nor the unlock counts in its first [WAKE_GRACE_MS]. The screen going off
+// still stops it at once, and the route's first touch silences it.
 //
 // One service with both types: it starts at the alarm, under the exact alarm's exemption from Android's background
 // start limits, as `systemExempted` (an exact-alarm holder's) and `specialUse` (the bubble and the unlock wait, which
@@ -132,6 +136,9 @@ class NagService : Service() {
         const val TEST_MS = 10_000L
         /** The power key's press that wakes a dark phone counts once the ring has played this long. */
         const val SCREEN_ON_AFTER_MS = 1_000L
+        /** A ring that brings its full screen ([Ring.wakes]): the screen turning on and the unlock count only after this
+         * long, so the full screen's own wake never stops it. */
+        const val WAKE_GRACE_MS = 5_000L
 
         @Volatile internal var running: NagService? = null
         /** The alarm receiver's wake lock, released once the service has started. */
@@ -140,8 +147,9 @@ class NagService : Service() {
         @Volatile internal var starting = false
 
         /** A ring asked for: the alarm's for [nag], or the experience test's sample ([test]), playing [sound] at the
-         * share [volume] for at most [cap] ms. */
-        internal data class Ring(val nag: Int, val sound: String, val volume: Double, val cap: Long, val test: Boolean)
+         * share [volume] for at most [cap] ms; [wakes] when its notification carries the full-screen intent. */
+        internal data class Ring(val nag: Int, val sound: String, val volume: Double, val cap: Long, val test: Boolean,
+            val wakes: Boolean = false)
 
         /** The ring the surface asks for now, or null. */
         @Volatile internal var ring: Ring? = null
@@ -247,10 +255,13 @@ class NagService : Service() {
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val now = playing ?: return
+                val played = SystemClock.uptimeMillis() - playedSince
+                // The full screen's own wake (and, with no lock screen, its "unlock") never counts.
+                val woken = now.wakes && played < WAKE_GRACE_MS
                 when (intent.action) {
-                    Intent.ACTION_USER_PRESENT -> AndroidOut.stopped(this@NagService, now.nag, "unlock", now.test)
+                    Intent.ACTION_USER_PRESENT -> if (!woken) AndroidOut.stopped(this@NagService, now.nag, "unlock", now.test)
                     Intent.ACTION_SCREEN_OFF -> AndroidOut.stopped(this@NagService, now.nag, "power", now.test)
-                    Intent.ACTION_SCREEN_ON -> if (SystemClock.uptimeMillis() - playedSince >= SCREEN_ON_AFTER_MS)
+                    Intent.ACTION_SCREEN_ON -> if (!woken && played >= SCREEN_ON_AFTER_MS)
                         AndroidOut.stopped(this@NagService, now.nag, "power", now.test)
                 }
             }

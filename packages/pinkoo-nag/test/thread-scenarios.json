@@ -5,7 +5,7 @@
     "`pace` names one of `paces` or is a pace object { firstMin, thenMin, repeatFirstMin, repeatEveryMin, repeats } (plan shape v2's NagLadder). firstMin: Notificacao to De novo. thenMin: to each next step on (Tela cheia, then the alarm 'Só se passar de tudo'). Repeats: the first repeatFirstMin after the last step, the others repeatEveryMin apart. A step that's off takes no time.",
     "`steps` is the plan's { bubble, fullScreen, unlock }; `alarm` is the dose's off | afterAll | onTime.",
     "`events` are her answers, applied in time order; an event at the same minute as a fire comes after it. do: notNow ('Agora não': the next step moves to max(when it was due, the tap + that step's own gap), never moving the step), promise (until: the deadline; nothing comes for the dose until then), swipe and open (change nothing).",
-    "`expect` is every fire of the dose in order, and nothing else before `dose.miss`. step: notify | again | full | alarm | repeat | deadline. rung: the reminders that reached her before this one (fires), capped at 4; a deadline counts as a fire but is not one of the repeats. sounding: the post plays her sound. folded: the step rides in the alarm's own notification, silent, and only the ring sounds ('Já na hora', and a promise's deadline for such a dose).",
+    "`expect` is every fire of the dose in order, and nothing else before `dose.miss`. step: notify | again | full | alarm | repeat | deadline. rung: the reminders that reached her before this one (fires), capped at 4; a deadline counts as a fire but is not one of the repeats. sounding: the post plays her sound. fullScreen: the post carries the nag route's full-screen intent: Tela cheia (once per dose), and the alarm every time it rings (Glauco, 2026-11-24). folded: the step rides in the alarm's own notification, silent, and only the ring sounds ('Já na hora', and a promise's deadline for such a dose).",
     "`notNow` are probes, not events: what 'Agora não' would say if tapped at `at` (after every fire and event at or before `at`). kind: remind | alarm | wait; next: the time it names, null for wait (nothing comes before the dose is missed: after the last repeat, or a next step that would fall at or past dose.miss)."
   ],
   "zone": "America/Sao_Paulo",
@@ -50,7 +50,7 @@
         { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
-        { "at": "2026-11-18T20:50", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:50", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": false },
         { "at": "2026-11-18T21:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T22:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T23:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
@@ -91,7 +91,7 @@
       "expect": [
         { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
-        { "at": "2026-11-18T20:35", "step": "alarm", "rung": 2, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:35", "step": "alarm", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": false },
         { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T22:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T23:05", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
@@ -108,7 +108,7 @@
       "dose": { "at": "2026-11-18T20:00", "miss": "2026-11-19T08:00", "seed": 0 },
       "events": [],
       "expect": [
-        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": true },
         { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:35", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:05", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
@@ -221,7 +221,7 @@
         { "at": "2026-11-18T20:20", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:55", "step": "deadline", "rung": 2, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:10", "step": "full", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
-        { "at": "2026-11-18T21:25", "step": "alarm", "rung": 4, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T21:25", "step": "alarm", "rung": 4, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": false },
         { "at": "2026-11-18T21:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T22:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T23:55", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
@@ -241,8 +241,8 @@
         { "at": "2026-11-18T20:02", "do": "promise", "until": "2026-11-18T20:30" }
       ],
       "expect": [
-        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
-        { "at": "2026-11-18T20:30", "step": "deadline", "rung": 1, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": true },
+        { "at": "2026-11-18T20:30", "step": "deadline", "rung": 1, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": true },
         { "at": "2026-11-18T20:50", "step": "again", "rung": 2, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:20", "step": "repeat", "rung": 3, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T22:20", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
@@ -299,7 +299,7 @@
         { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:10", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:20", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
-        { "at": "2026-11-18T20:30", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:30", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": false },
         { "at": "2026-11-18T20:50", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:10", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }
@@ -317,7 +317,7 @@
         { "at": "2026-11-18T20:00", "step": "notify", "rung": 0, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:05", "step": "again", "rung": 1, "sounding": true, "bubble": true, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:10", "step": "full", "rung": 2, "sounding": false, "bubble": false, "fullScreen": true, "alarm": false, "folded": false },
-        { "at": "2026-11-18T20:15", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": false, "alarm": true, "folded": false },
+        { "at": "2026-11-18T20:15", "step": "alarm", "rung": 3, "sounding": false, "bubble": false, "fullScreen": true, "alarm": true, "folded": false },
         { "at": "2026-11-18T20:30", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T20:45", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false },
         { "at": "2026-11-18T21:00", "step": "repeat", "rung": 4, "sounding": true, "bubble": false, "fullScreen": false, "alarm": false, "folded": false }

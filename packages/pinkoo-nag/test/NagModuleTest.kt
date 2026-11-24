@@ -402,11 +402,34 @@ internal class NagModuleTest : SurfaceCase() {
         assertEquals(Notification.CATEGORY_ALARM, n.category)
         assertEquals(Notification.VISIBILITY_PUBLIC, n.visibility)
         assertEquals(listOf("Stop"), n.actions.map { it.title.toString() })
+        assertNull("no full-screen access: no full screen", n.fullScreenIntent)
+        assertFalse(NagService.ring!!.wakes)
         idle(NagService.TEST_MS + 100)
         assertNull("rang out", NagService.ring)
         assertNull(test())
         assertNull(NagService.running)
         assertTrue("nothing told to the core", told.isEmpty())
+    }
+
+    /** As the real alarm (Glauco, 2026-11-24): with full-screen access the test's alarm notification carries the
+     * full-screen intent to the route the app names (its nag in test mode), over the keyguard, and its ring knows it
+     * wakes the screen; without the access, none (`theAlarmTestRingsAtMostTenSecondsInTheServiceStartedInFront`). */
+    @Config(sdk = [33])
+    @Test fun theAlarmTestBringsItsFullScreenLikeTheRealAlarm() {
+        ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(app, Settings.System.DEFAULT_ALARM_ALERT_URI), ShadowMediaPlayer.MediaInfo(600_000, 0))
+        made()
+        send("rehearse", rehearsal("alarm", after = 5_000))
+        broadcast(Intent.ACTION_SCREEN_OFF)
+        NagReceiver().onReceive(app, shadowOf(rehearseAlarms().single().operation).savedIntent)
+        assertTrue(NagService.ring!!.wakes)
+        val n = test()!!.notification
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertNotNull(n.fullScreenIntent)
+        val opens = shadowOf(n.fullScreenIntent).savedIntent
+        assertEquals("/nag/test?via=test&step=alarm", opens.data.toString())
+        assertTrue(opens.getBooleanExtra("dev.exact.activation.overLock", false))
+        send("stopRehearsal", JSONObject())
+        assertNull(test())
     }
 
     // MARK: the previews (item 16)

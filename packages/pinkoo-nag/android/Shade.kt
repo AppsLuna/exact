@@ -10,8 +10,8 @@
 // `setOnlyAlertOnce` on her reminder channel, posted only when what they show changed.
 //
 // Her reminder channels ([Remind]) are one per sound a plan names, made lazily, versioned, never remade under a new id
-// when she blocked or muted one, and deleted only when no plan names them. `docs/exact.md` › Planned: the gentle
-// reminder, items 4, 5 and 17; `docs/architecture.md` › Nagging on the phone.
+// when she blocked or muted one, and deleted only when no plan names them. `docs/exact.md` › The gentle reminder,
+// items 4, 5 and 17; `docs/architecture.md` › Nagging on the phone.
 package pinkoo.nag
 
 import android.app.Notification
@@ -304,9 +304,10 @@ internal object Shade {
     )
 
     /**
-     * How [p] shows. The alarm's own notification while it rings (or at its post); the full screen when a fresh post
-     * enters Tela cheia and Android would open it (the access granted, the phone locked or dark, Do Not Disturb off);
-     * otherwise her reminder channel, or the waiting channel in front (decision 17: no heads-up over the app).
+     * How [p] shows. The alarm's own notification while it rings (or at its post: with the full-screen intent when its
+     * fire rings, [build]); the full screen when a fresh post enters Tela cheia and Android would open it (the access
+     * granted, the phone locked or dark, Do Not Disturb off); otherwise her reminder channel, or the waiting channel in
+     * front (decision 17: no heads-up over the app).
      */
     private fun look(c: Context, plan: Plan, p: Post, fresh: Boolean): Look {
         val lead = p.groups.firstOrNull() ?: ""
@@ -398,7 +399,10 @@ internal object Shade {
      * The reminder as [look] says. A reminder: her channel (or the full screen's, silent), the reminder category,
      * not ongoing (a swipe dismisses it anywhere), "Tomei", "Tomo daqui a…" and "Agora não" on every step, and a public
      * version without the medication's name. The alarm's: the alarm category, ongoing, public with neutral text and
-     * "Parar" (a broadcast, so it works on the locked phone); its delete intent stops the ring too.
+     * "Parar" (a broadcast, so it works on the locked phone); its delete intent stops the ring too. Posted as its fire
+     * rings ([Post.fullScreen]), it carries the nag route's full-screen intent whenever the access is granted (Glauco,
+     * 2026-11-24): Android turns the screen on and opens the route over the keyguard, ringing until her first touch, or
+     * shows a heads-up to a phone in use. Without the access it rings as before, with its notification alone.
      */
     private fun build(c: Context, plan: Plan, p: Post, look: Look, quiet: Boolean): Notification {
         val t = plan.texts

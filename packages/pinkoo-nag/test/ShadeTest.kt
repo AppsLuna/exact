@@ -214,6 +214,54 @@ internal class ShadeTest : SurfaceCase() {
         assertTrue(only(back.notification))
     }
 
+    /**
+     * Glauco, 2026-11-24: the alarm's notification, posted as its fire rings, carries the nag route's full-screen intent
+     * (over the keyguard, `via=fsi`) whenever the access is granted: on a locked or dark phone, and on one in use too
+     * (Android shows the heads-up), Do Not Disturb left to Android. A refresh while it rings never re-attaches it.
+     */
+    @Config(sdk = [33]) // full-screen access allowed by default on Android 12 and 13
+    @Test fun theAlarmBringsTheFullScreenEveryTimeItRingsWithTheAccess() {
+        val o = out()
+        phone(locked = true, on = false)
+        o.post(post(1, Step.ALARM, sounding = false, alarm = true, fullScreen = true))
+        var n = nag()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertNotNull(n.fullScreenIntent)
+        val opens = intentOf(n.fullScreenIntent)
+        assertTrue("the nag route, ringing there", opens.data.toString().contains("via=fsi"))
+        assertTrue("over the keyguard", opens.getBooleanExtra("dev.exact.activation.overLock", false))
+        // The phone in use: attached all the same (Android shows a heads-up), unlike Tela cheia's.
+        phone(locked = false, on = true)
+        o.post(post(2, Step.ALARM, sounding = false, alarm = true, fullScreen = true))
+        assertNotNull(nag()!!.notification.fullScreenIntent)
+        // "Já na hora": the notification folded into the ring.
+        phone(locked = true, on = false)
+        o.post(post(3, Step.NOTIFY, sounding = false, alarm = true, folded = true, fullScreen = true))
+        n = nag()!!.notification
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertNotNull(n.fullScreenIntent)
+        // In front none: the app opens the nag screen itself.
+        o.post(post(4, Step.ALARM, sounding = false, alarm = true, fullScreen = true, front = true))
+        assertNull(nag()!!.notification.fullScreenIntent)
+        // Another dose time's step folded in while it rings (no ring of its own): none.
+        o.post(post(5, Step.NOTIFY, sounding = false, alarm = true, folded = true))
+        assertNull(nag()!!.notification.fullScreenIntent)
+    }
+
+    /** Without full-screen access (Android 14 and later, a store install: Robolectric's default) the alarm rings exactly
+     * as before: its own notification, with no full-screen intent. */
+    @Test fun withoutTheAccessTheAlarmIsItsNotificationAlone() {
+        assertFalse(FullScreen.allowed(app))
+        phone(locked = true, on = false)
+        out().post(post(1, Step.ALARM, sounding = false, alarm = true, fullScreen = true))
+        val n = nag()!!.notification
+        assertEquals(Shade.CH_NAG, n.channelId)
+        assertEquals(Notification.CATEGORY_ALARM, n.category)
+        assertEquals(listOf("Stop"), actions(n))
+        assertNull(n.fullScreenIntent)
+    }
+
     /** "Já na hora": the dose time's step folded into the alarm is the alarm's notification, on the silent channel: the
      * ring is the only sound. */
     @Test fun aStepFoldedIntoTheAlarmIsTheAlarmsNotification() {

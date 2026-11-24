@@ -87,6 +87,7 @@ internal class FrontTest : CoreCase() {
         Engine.fire(app, clock, Chain.ALARM)
         assertEquals(Step.ALARM, out.posts.last().step)
         assertTrue(out.posts.last().front)
+        assertFalse("no full-screen intent over the app: the app opens the nag screen", out.posts.last().fullScreen)
         assertEquals("ring:${out.posts.last().nag}", out.calls.last { it.startsWith("ring") })
         assertEquals(Step.ALARM, front()!!.second)
         // Her first touch on the nag screen silences it and ends the front.

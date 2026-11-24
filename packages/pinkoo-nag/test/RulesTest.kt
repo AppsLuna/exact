@@ -245,7 +245,7 @@ class RulesTest {
         val p = plan(d)
         val st = State()
         Rules.merge(p, st, at("2026-11-18T19:00"))
-        assertEquals(listOf("20:00 notify", "20:20 again", "20:35 full full", "20:50 alarm alarm", "21:20 repeat", "22:20 repeat", "23:20 repeat"),
+        assertEquals(listOf("20:00 notify", "20:20 again", "20:35 full full", "20:50 alarm alarm full", "21:20 repeat", "22:20 repeat", "23:20 repeat"),
             drive(p, st, at("2026-11-18T19:00"), at("2026-11-19T09:00")))
         val g = st.groups.values.single()
         assertEquals(3, g.repeats)
