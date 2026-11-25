@@ -696,13 +696,15 @@ and focus changes, stream opens and closes, submitted cue times and the discard 
 second they give pending and native queued operations, live voices, drops, late starts, timestamp availability,
 latency and underruns. These diagnostics are disabled in non-debuggable apps.
 
-**Haptics.** An app's haptic (kind 2) is one of the vibrator's predefined effects (`AppHaptics`; Pinkoo's fork, C13:
-upstream plays `View.performHapticFeedback`, which a cheap motor barely plays and Android's touch-feedback switch
-silences). `selection`, `impact-light` and `impact-soft` are the tick, `impact-medium` and `impact-rigid` the click,
-`impact-heavy` and `success` the heavy click, `warning` and `error` the double click. A vibrator that doesn't say it
-has the effect (Android 11 answers) plays a one-shot of 20 to 40 ms at full amplitude instead, two for the double
-click. From Android 13 it vibrates as hardware feedback, which neither the touch-feedback switch nor battery saver
-mutes (the phone's master vibration switch does); before, with no attributes. An app that wants none asks for none.
+**Haptics.** An app's haptic (kind 2) drives the vibrator with an explicit duration and amplitude (`AppHaptics`;
+Pinkoo's fork, C13: upstream plays `View.performHapticFeedback`, and neither it nor the predefined tick and click
+could be felt on a Galaxy A06, while the same phone felt the Flutter `vibration` plugin's one-shots). `selection` is
+a one-shot of 25 ms at amplitude 110, `impact-light` and `impact-soft` 30 ms at 140, `impact-medium` and
+`impact-rigid` 40 ms at 190, `impact-heavy` 55 ms at 255; `success` a waveform of 35 ms at 160 and, 45 ms later,
+45 ms at 255; `warning` and `error` two 55 ms pulses at 255, 55 ms apart. A vibrator without amplitude control plays
+the same durations at its default amplitude. The attributes are an alarm's (`VibrationAttributes.USAGE_ALARM` from
+Android 13, an alarm's sonification `AudioAttributes` before, as the plugin hands them): neither the touch-feedback
+switch nor battery saver mutes them (the phone's master vibration switch does). An app that wants none asks for none.
 
 A GPU surface's haptics (kind 15) need the vibrator, so the shell's manifest asks for `VIBRATE`, a normal permission.
 A texture is a repeating waveform at an amplitude of its `intensity`, played again when the amplitude changes, at

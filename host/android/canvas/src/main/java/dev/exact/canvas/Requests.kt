@@ -22,7 +22,7 @@ import java.io.File
  * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/painted/src/presenter/requests.rs`
  * writes them.
  *
- * Everything here is the platform's own: an `Intent` for a link, the vibrator's predefined effects for a haptic, the
+ * Everything here is the platform's own: an `Intent` for a link, the vibrator for a haptic, the
  * system's clipboard and its Sharesheet. Nothing is imitated, and the reader has no dependency for any of it.
  */
 internal class Requests(private val activity: ExactActivity) {

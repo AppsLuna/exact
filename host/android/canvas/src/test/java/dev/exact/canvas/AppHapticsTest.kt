@@ -1,6 +1,7 @@
 package dev.exact.canvas
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.VibratorManager
@@ -16,10 +17,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowVibrator
-import org.robolectric.util.ReflectionHelpers
 
-/** Pinkoo's fork, C13: an app's haptic on the vibrator, a predefined effect or a one-shot a cheap motor feels. */
+/** Pinkoo's fork, C13: an app's haptic on the vibrator, an explicit one-shot or waveform as an alarm (LagX's recipe). */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class AppHapticsTest {
@@ -28,50 +27,53 @@ class AppHapticsTest {
 
     private fun usage() = (vibrator.vibrationAttributesFromLastVibration as VibrationAttributes).usage
 
-    /** The predefined effect the vibrator was last handed: its one segment's id (the shadow keeps the segments). */
-    private fun played(): Int {
-        val segments = ReflectionHelpers.getStaticField<List<Any>>(ShadowVibrator::class.java, "vibrationEffectSegments")
-        assertEquals(1, segments.size)
-        return segments[0].javaClass.getMethod("getEffectId").invoke(segments[0]) as Int
+    /** Each kind's duration and amplitude, the `vibration` plugin's numbers LagX plays. */
+    @Test fun eachKindIsAnExplicitDurationAndAmplitude() {
+        val shots = mapOf(1 to (25L to 110), 2 to (30L to 140), 5 to (30L to 140), 3 to (40L to 190), 6 to (40L to 190), 4 to (55L to 255))
+        for ((kind, shot) in shots) assertEquals(VibrationEffect.createOneShot(shot.first, shot.second), AppHaptics.effect(kind, true))
+        assertEquals(VibrationEffect.createWaveform(longArrayOf(0, 35, 45, 45), intArrayOf(0, 160, 0, 255), -1), AppHaptics.effect(7, true))
+        for (kind in listOf(8, 9))
+            assertEquals(VibrationEffect.createWaveform(longArrayOf(0, 55, 55, 55), intArrayOf(0, 255, 0, 255), -1), AppHaptics.effect(kind, true))
+        assertNull(AppHaptics.effect(0, true))
+        assertNull(AppHaptics.effect(10, true))
     }
 
-    @Test fun eachKindIsAPredefinedEffect() {
-        val ids = (1..9).map { AppHaptics.predefined(it) }
-        assertEquals(listOf(VibrationEffect.EFFECT_TICK, VibrationEffect.EFFECT_TICK, VibrationEffect.EFFECT_CLICK,
-            VibrationEffect.EFFECT_HEAVY_CLICK, VibrationEffect.EFFECT_TICK, VibrationEffect.EFFECT_CLICK,
-            VibrationEffect.EFFECT_HEAVY_CLICK, VibrationEffect.EFFECT_DOUBLE_CLICK, VibrationEffect.EFFECT_DOUBLE_CLICK), ids)
-        assertNull(AppHaptics.predefined(0))
-        assertNull(AppHaptics.predefined(10))
+    /** Without amplitude control, the same durations at the vibrator's default amplitude. */
+    @Test fun withoutAmplitudeControlTheDefaultAmplitude() {
+        assertEquals(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE), AppHaptics.effect(1, false))
+        assertEquals(VibrationEffect.createOneShot(55, VibrationEffect.DEFAULT_AMPLITUDE), AppHaptics.effect(4, false))
+        assertEquals(VibrationEffect.createWaveform(longArrayOf(0, 35, 45, 45), -1), AppHaptics.effect(7, false))
+        assertEquals(VibrationEffect.createWaveform(longArrayOf(0, 55, 55, 55), -1), AppHaptics.effect(9, false))
     }
 
-    /** A vibrator that has the effects plays them, as hardware feedback: the touch-feedback switch doesn't mute it. */
-    @Test fun aSupportedEffectIsRequestedOnTheVibrator() {
-        val haptics = AppHaptics(context) { _, _ -> true }
-        for ((kind, id) in listOf(3 to VibrationEffect.EFFECT_CLICK, 1 to VibrationEffect.EFFECT_TICK,
-            7 to VibrationEffect.EFFECT_HEAVY_CLICK, 4 to VibrationEffect.EFFECT_HEAVY_CLICK, 9 to VibrationEffect.EFFECT_DOUBLE_CLICK)) {
-            assertEquals(VibrationEffect.createPredefined(id), haptics.play(kind))
-            assertEquals(id, played())
-            assertEquals(VibrationAttributes.USAGE_HARDWARE_FEEDBACK, usage())
+    /** On the vibrator, as an alarm: the touch-feedback switch and battery saver don't mute it. */
+    @Test fun itPlaysOnTheVibratorAsAnAlarm() {
+        vibrator.setHasAmplitudeControl(true)
+        val haptics = AppHaptics(context)
+        for ((kind, shot) in listOf(3 to (40L to 190), 1 to (25L to 110), 4 to (55L to 255))) {
+            val (ms, level) = shot
+            assertEquals(VibrationEffect.createOneShot(ms, level), haptics.play(kind))
+            assertEquals(ms, vibrator.milliseconds)
+            assertEquals(VibrationAttributes.USAGE_ALARM, usage())
         }
+        haptics.play(8)
+        assertArrayEquals(longArrayOf(0, 55, 55, 55), vibrator.pattern)
+        assertEquals(VibrationAttributes.USAGE_ALARM, usage())
         assertNull(haptics.play(0))
     }
 
-    /** Without the effect, a one-shot at full amplitude long enough for a cheap motor, or two for the double click. */
-    @Test fun withoutTheEffectAOneShotPlays() {
-        val haptics = AppHaptics(context) { _, _ -> false }
-        for ((kind, ms) in listOf(1 to AppHaptics.TICK_MS, 3 to AppHaptics.CLICK_MS, 4 to AppHaptics.HEAVY_MS)) {
-            assertEquals(VibrationEffect.createOneShot(ms, AppHaptics.FULL), haptics.play(kind))
-            assertEquals(ms, vibrator.milliseconds)
-            assertEquals(VibrationAttributes.USAGE_HARDWARE_FEEDBACK, usage())
-        }
-        haptics.play(8)
-        assertArrayEquals(longArrayOf(0, AppHaptics.CLICK_MS, AppHaptics.DOUBLE_GAP_MS, AppHaptics.CLICK_MS), vibrator.pattern)
+    /** A motor without amplitude control (the shadow's default): the default amplitude, still as an alarm. */
+    @Test fun aMotorWithoutAmplitudeControlPlaysTheDefault() {
+        vibrator.setHasAmplitudeControl(false)
+        assertEquals(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE), AppHaptics(context).play(3))
+        assertEquals(40L, vibrator.milliseconds)
+        assertEquals(VibrationAttributes.USAGE_ALARM, usage())
     }
 
     /** A phone without a vibrator: nothing, and no failure. */
     @Test fun noVibratorPlaysNothing() {
         vibrator.setHasVibrator(false)
-        assertNull(AppHaptics(context) { _, _ -> true }.play(3))
+        assertNull(AppHaptics(context).play(3))
         assertFalse(vibrator.isVibrating)
     }
 
@@ -80,13 +82,16 @@ class AppHapticsTest {
         val requests = Requests(Robolectric.buildActivity(ExactActivity::class.java).get())
         requests.perform(intArrayOf(2, 1, 1, 3))
         assertTrue(vibrator.isVibrating)
-        assertEquals(VibrationAttributes.USAGE_HARDWARE_FEEDBACK, usage())
+        assertEquals(40L, vibrator.milliseconds)
+        assertEquals(VibrationAttributes.USAGE_ALARM, usage())
     }
 
-    /** Android 12 has no vibration attributes for an app: a vibration without them, which touch feedback doesn't mute. */
-    @Test @Config(sdk = [31]) fun beforeAndroid13ItVibratesWithoutTouchAttributes() {
-        AppHaptics(context) { _, _ -> true }.play(4)
-        assertEquals(VibrationEffect.EFFECT_HEAVY_CLICK, played())
-        assertNull(vibrator.audioAttributesFromLastVibration?.takeIf { it.usage == android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION })
+    /** Before Android 13, an alarm's audio attributes, as the plugin hands them (Android 12 makes them an alarm's vibration). */
+    @Test @Config(sdk = [31]) fun beforeAndroid13AnAlarmsAudioAttributes() {
+        assertEquals(AudioAttributes.USAGE_ALARM, AppHaptics.ALARM.usage)
+        assertEquals(AudioAttributes.CONTENT_TYPE_SONIFICATION, AppHaptics.ALARM.contentType)
+        AppHaptics(context).play(4)
+        assertEquals(55L, vibrator.milliseconds)
+        assertEquals(VibrationAttributes.USAGE_ALARM, usage())
     }
 }
