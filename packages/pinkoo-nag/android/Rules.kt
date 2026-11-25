@@ -238,16 +238,15 @@ internal object Rules {
         for (name in groups) settle(plan, st, st.groups.getOrPut(name) { Group(name) })
     }
 
-    /** How long before its time a dose may be confirmed (the app's early window, `src/domain` EARLY_WINDOW_MS). */
-    const val EARLY_MS = 2 * 60 * 60_000L
-
     /**
-     * The state lost (its file unreadable) but not the plan: the doses still more than [EARLY_MS] ahead go on, since
-     * none of them could have been confirmed yet. The ones before are left out, as she may have taken them, until the
-     * app's next plan, which a lost state always merges (its hash is unknown). The threads of those ahead start anew.
+     * The state lost (its file unreadable) but not the plan: the doses of the days ahead go on, since none of them could
+     * have been confirmed yet (the app lets a dose be confirmed early from the start of its own local day, `src/domain`
+     * `doseWindow`). Today's and earlier ones are left out, as she may have taken them, until the app's next plan, which
+     * a lost state always merges (its hash is unknown). The threads of those ahead start anew.
      */
     fun recover(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
-        val ahead = plan.doses.filter { WallClock.epoch(it.group, zone) > now + EARLY_MS }
+        val today = WallClock.day(now, zone)
+        val ahead = plan.doses.filter { it.group.take(10) > today }
         for (d in ahead) st.doses.getOrPut(d.key) { DoseState(d.key) }
         for (name in ahead.map { it.group }.toSet()) st.groups.getOrPut(name) { Group(name) }
     }

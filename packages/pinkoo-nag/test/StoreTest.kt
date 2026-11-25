@@ -16,6 +16,7 @@ import java.io.File
 @LooperMode(LooperMode.Mode.PAUSED)
 internal class StoreTest : CoreCase() {
     private val pillB = NagFixtures.dose("b@2026-11-18T12:00", "2026-11-18T12:00", "2026-11-18T20:00", "Pill B")
+    private val pillC = NagFixtures.dose("c@2026-11-19T12:00", "2026-11-19T12:00", "2026-11-19T20:00", "Pill C")
     private fun breakState() = File(File(app.createDeviceProtectedStorageContext().filesDir, "pinkoo.nag"), "state.json").writeText("{\"groups\": [")
     private fun ids() = Store.events(app).map { it.id }
     private fun step(): Long? = shadowOf(alarms).scheduledAlarms.firstOrNull { it.operation != null && shadowOf(it.operation).requestCode == Chain.STEP }?.triggerAtTime
@@ -26,7 +27,7 @@ internal class StoreTest : CoreCase() {
      * handed out: the wall clock in milliseconds, and any id still waiting in the events file.
      */
     @Test fun eventIdsNeverRepeatWhenTheStateFileBreaks() {
-        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
+        Engine.schedule(app, NagFixtures.plan(pillA, pillB, pillC), at("2026-11-18T07:00"))
         Engine.fire(app, at("2026-11-18T08:00"))
         Engine.notNowKeys(app, listOf(pillA.getString("key")), at("2026-11-18T08:00") + 5_000)
         val before = ids()
@@ -36,7 +37,7 @@ internal class StoreTest : CoreCase() {
         breakState()
         clock = at("2026-11-18T08:30")
         Engine.restore(app, clock)
-        clock = at("2026-11-18T12:00")
+        clock = at("2026-11-19T12:00")
         Engine.fire(app, clock)
         val after = ids()
         assertEquals(listOf("fired"), Store.events(app).map { it.kind })
@@ -55,24 +56,27 @@ internal class StoreTest : CoreCase() {
     }
 
     /**
-     * The state lost with its file, the threads go on from the plan kept: the doses still more than two hours ahead are
-     * reminded on time (none could have been confirmed yet, which opens two hours before), while the ones before, which
-     * she may have confirmed, wait for the app's next plan rather than remind her of a dose already taken.
+     * The state lost with its file, the threads go on from the plan kept: the doses of the days ahead are reminded on
+     * time (none could have been confirmed yet: a dose may be confirmed early from the start of its own day), while
+     * today's, which she may have confirmed (pill B's 12:00 taken at 07:35), wait for the app's next plan rather than
+     * remind her of a dose already taken.
      */
-    @Test fun aBrokenStateKeepsRemindingOnlyTheDosesStillAhead() {
-        Engine.schedule(app, NagFixtures.plan(pillA, pillB), at("2026-11-18T07:00"))
+    @Test fun aBrokenStateKeepsRemindingOnlyTheDosesOfTheDaysAhead() {
+        Engine.schedule(app, NagFixtures.plan(pillA, pillB, pillC), at("2026-11-18T07:00"))
         Engine.resolve(app, listOf(pillA.getString("key")), "taken", null, at("2026-11-18T07:30"))
+        Engine.resolve(app, listOf(pillB.getString("key")), "taken", null, at("2026-11-18T07:35"))
         breakState()
         clock = at("2026-11-18T07:40")
         NagSystemReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
-        assertEquals("pill B's time, not pill A's again", at("2026-11-18T12:00"), step())
+        assertEquals("pill C's time, not pill A's or B's again", at("2026-11-19T12:00"), step())
         Engine.fire(app, at("2026-11-18T08:00"))
-        assertTrue(out.posts.isEmpty())
         Engine.fire(app, at("2026-11-18T12:00"))
-        assertEquals(Step.NOTIFY, Store.state(app).groups.getValue("2026-11-18T12:00").step)
-        assertEquals(listOf("Pill B"), out.posts.single().names)
+        assertTrue(out.posts.isEmpty())
+        Engine.fire(app, at("2026-11-19T12:00"))
+        assertEquals(Step.NOTIFY, Store.state(app).groups.getValue("2026-11-19T12:00").step)
+        assertEquals(listOf("Pill C"), out.posts.single().names)
         // The app's next plan takes over: a dose it names again opens.
-        Engine.schedule(app, NagFixtures.plan(pillB, made = at("2026-11-18T12:01")), at("2026-11-18T12:01"))
-        assertEquals(listOf("b@2026-11-18T12:00"), Store.state(app).doses.keys.toList())
+        Engine.schedule(app, NagFixtures.plan(pillC, made = at("2026-11-19T12:01")), at("2026-11-19T12:01"))
+        assertEquals(listOf("c@2026-11-19T12:00"), Store.state(app).doses.keys.toList())
     }
 }
