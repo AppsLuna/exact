@@ -69,6 +69,9 @@ internal class StoreTest : CoreCase() {
         clock = at("2026-11-18T07:40")
         NagSystemReceiver().onReceive(app, android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED))
         assertEquals("pill C's time, not pill A's or B's again", at("2026-11-19T12:00"), step())
+        // A dose opens early at the start of its day, or 2 h before it just after midnight.
+        assertEquals(at("2026-11-19T00:00"), Rules.earlyFrom("2026-11-19T12:00"))
+        assertEquals(at("2026-11-18T22:30"), Rules.earlyFrom("2026-11-19T00:30"))
         Engine.fire(app, at("2026-11-18T08:00"))
         Engine.fire(app, at("2026-11-18T12:00"))
         assertTrue(out.posts.isEmpty())

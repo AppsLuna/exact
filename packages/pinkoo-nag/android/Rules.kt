@@ -238,15 +238,24 @@ internal object Rules {
         for (name in groups) settle(plan, st, st.groups.getOrPut(name) { Group(name) })
     }
 
+    /** A dose just after midnight may be confirmed this long before its time, the day before ([earlyFrom]). */
+    const val EARLY_MS = 2 * 60 * 60_000L
+
     /**
-     * The state lost (its file unreadable) but not the plan: the doses of the days ahead go on, since none of them could
-     * have been confirmed yet (the app lets a dose be confirmed early from the start of its own local day, `src/domain`
-     * `doseWindow`). Today's and earlier ones are left out, as she may have taken them, until the app's next plan, which
-     * a lost state always merges (its hash is unknown). The threads of those ahead start anew.
+     * From when the dose at [group] may be confirmed early, as the app has it (`src/domain` `earlyFrom`): the start of
+     * its own local day, or [EARLY_MS] before it when that is earlier (a dose just after midnight).
+     */
+    fun earlyFrom(group: String, zone: ZoneId = ZoneId.systemDefault()): Long =
+        minOf(WallClock.epoch(group.take(10) + "T00:00", zone), WallClock.epoch(group, zone) - EARLY_MS)
+
+    /**
+     * The state lost (its file unreadable) but not the plan: the doses that can't be confirmed yet ([earlyFrom] still
+     * ahead, so in practice those of the days ahead) go on. The ones before are left out, as she may have taken them,
+     * until the app's next plan, which a lost state always merges (its hash is unknown). The threads of those ahead start
+     * anew.
      */
     fun recover(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()) {
-        val today = WallClock.day(now, zone)
-        val ahead = plan.doses.filter { it.group.take(10) > today }
+        val ahead = plan.doses.filter { earlyFrom(it.group, zone) > now }
         for (d in ahead) st.doses.getOrPut(d.key) { DoseState(d.key) }
         for (name in ahead.map { it.group }.toSet()) st.groups.getOrPut(name) { Group(name) }
     }
