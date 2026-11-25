@@ -664,7 +664,7 @@ capability has a call of its own.
 | Kind | Request | Words after the count | What the reader does | Answer |
 |---|---|---|---|---|
 | 1 | open a link that leaves the app | a string: an absolute `http`, `https`, `mailto` or `tel` URL (exact2 lets no other scheme through) | `ACTION_VIEW` for the web, `ACTION_SENDTO` for `mailto:`, `ACTION_DIAL` for `tel:`. No Custom Tab, which is a library's | none |
-| 2 | a haptic (`haptic()`, a pressable's `-exact-press-haptic`) | one word: 1 `selection`, 2 `impact-light`, 3 `impact-medium` (and `impact`), 4 `impact-heavy`, 5 `impact-soft`, 6 `impact-rigid`, 7 `success`, 8 `warning`, 9 `error` | `View.performHapticFeedback` | none |
+| 2 | a haptic (`haptic()`, a pressable's `-exact-press-haptic`) | one word: 1 `selection`, 2 `impact-light`, 3 `impact-medium` (and `impact`), 4 `impact-heavy`, 5 `impact-soft`, 6 `impact-rigid`, 7 `success`, 8 `warning`, 9 `error` | `AppHaptics`, on the vibrator ("Haptics", below) | none |
 | 3 | `copyText` | a string | the clipboard (`ClipboardManager`) | none |
 | 4 | `share` | one word saying which of the three the app gave (bit 0 the title, 1 the text, 2 the URL), then three strings: title, text, URL; then each file's `app:/` path, a string each, to the end (LLP 1094.000 D7) | the Sharesheet (`ACTION_SEND` in a chooser) | `shared`, `dismissed`, or why it could not be shown; exact2 journals `share: shared`, `share: dismissed` or `share: refused: …` |
 | 5 | whether Back has somewhere to go in the app (D6) | one word: 1 or 0 | registers its `OnBackInvokedCallback` while it has, and unregisters it while it has not, so Back at the first screen is the system's own and leaves with its animation | none |
@@ -696,12 +696,13 @@ and focus changes, stream opens and closes, submitted cue times and the discard 
 second they give pending and native queued operations, live voices, drops, late starts, timestamp availability,
 latency and underruns. These diagnostics are disabled in non-debuggable apps.
 
-**Haptics.** Android names occasions, not strengths. Under its constants are a texture tick, a tick, a click, a
-heavy click and a double click, and Exact's names choose by those: `selection` is `SEGMENT_TICK` (Android 14;
-`CLOCK_TICK` below), `impact-light` `CONTEXT_CLICK`, `impact-medium` `VIRTUAL_KEY`, `impact-heavy` `LONG_PRESS`,
-`impact-soft` `TEXT_HANDLE_MOVE`, `success` `CONFIRM`, `error` `REJECT`. Android has nothing for two of them:
-`impact-rigid` is the click `impact-medium` is, and `warning` is `REJECT`, as `error` is. The system plays a haptic or
-not by the person's touch feedback setting.
+**Haptics.** An app's haptic (kind 2) is one of the vibrator's predefined effects (`AppHaptics`; Pinkoo's fork, C13:
+upstream plays `View.performHapticFeedback`, which a cheap motor barely plays and Android's touch-feedback switch
+silences). `selection`, `impact-light` and `impact-soft` are the tick, `impact-medium` and `impact-rigid` the click,
+`impact-heavy` and `success` the heavy click, `warning` and `error` the double click. A vibrator that doesn't say it
+has the effect (Android 11 answers) plays a one-shot of 20 to 40 ms at full amplitude instead, two for the double
+click. From Android 13 it vibrates as hardware feedback, which neither the touch-feedback switch nor battery saver
+mutes (the phone's master vibration switch does); before, with no attributes. An app that wants none asks for none.
 
 A GPU surface's haptics (kind 15) need the vibrator, so the shell's manifest asks for `VIBRATE`, a normal permission.
 A texture is a repeating waveform at an amplitude of its `intensity`, played again when the amplitude changes, at
@@ -770,7 +771,7 @@ stage 3. Accessibility events
 (D13) will take it too.
 
 `x_log_requests=1` at launch (exact2's `EXACT_LOG_REQUESTS`) logs each request as exact2 queues it and as the reader
-acts on it, with what `performHapticFeedback` returned: a haptic and a clipboard write show nowhere else.
+acts on it, with the effect a haptic played: a haptic and a clipboard write show nowhere else.
 
 ## Pickers and hatches (LLP 1115.001.000)
 
@@ -1694,7 +1695,7 @@ The Rust of it (12 KB) is in every app's library: the host's Rust is the same fo
 | Edge to edge, the bars' icons | `setDecorFitsSystemWindows`, `WindowInsetsController` (API 30) | `systemUiVisibility` flags and the cutout's short edges |
 | Insets, the window's size | `WindowInsets.Type`, `currentWindowMetrics` (API 30) | the root's system window, stable, cutout and gesture insets; `Display.getRealSize` |
 | The keyboard, accessibility's nodes and events, a node's value | API 30's | `InputMethodManager`; `obtain()`; the value in its description |
-| Haptics `CONFIRM`, `REJECT` | API 30's | the nearest older constants, as AndroidX's compat falls back |
+| Haptics | the vibrator's word on its predefined effects (API 30) | a one-shot for each (C13) |
 | The device's colours | dynamic colour (API 31) | Material 3's baseline scheme |
 | A radial gradient with two circles | API 31's constructor | the end circle, the start circle's radius folded into the stops when they share a centre |
 | Back | `OnBackInvokedCallback` (API 33) | `onBackPressed` (also on Android 12) |

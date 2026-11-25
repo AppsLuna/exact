@@ -13,7 +13,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
-import android.view.HapticFeedbackConstants
 import java.io.File
 
 /**
@@ -23,13 +22,13 @@ import java.io.File
  * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/painted/src/presenter/requests.rs`
  * writes them.
  *
- * Everything here is the platform's own: an `Intent` for a link, `performHapticFeedback` for a haptic, the system's
- * clipboard and its Sharesheet. Nothing is imitated, and the reader has no dependency for any of it.
+ * Everything here is the platform's own: an `Intent` for a link, the vibrator's predefined effects for a haptic, the
+ * system's clipboard and its Sharesheet. Nothing is imitated, and the reader has no dependency for any of it.
  */
 internal class Requests(private val activity: ExactActivity) {
     private val appTitle = activity.title
 
-    /** The view a haptic is played through and whose keyboard is shown: the activity's reader, as it is made. */
+    /** The view whose keyboard is shown: the activity's reader, as it is made. */
     var view: ExactView? = null
     /** Called with whether system Back has somewhere to go in the app (LLP 1115.001 D6). */
     var back: (Boolean) -> Unit = {}
@@ -42,6 +41,8 @@ internal class Requests(private val activity: ExactActivity) {
      * made with: the first may come after a pause. */
     private var haptics: SurfaceHaptics? = null
     private var paused = false
+    /** An app's haptics (Pinkoo's fork, C13), made at the first. */
+    private var appHaptics: AppHaptics? = null
 
     /** `x_log_requests=1` (exact2's EXACT_LOG_REQUESTS): each request as it is acted on, to the log. A haptic or a
      * clipboard write shows nowhere else. */
@@ -202,31 +203,10 @@ internal class Requests(private val activity: ExactActivity) {
         try { activity.startActivity(intent) } catch (e: ActivityNotFoundException) { Log.w(TAG, "no app opens ${url.replaceFirst(USERINFO, "$1//")}") }
     }
 
-    /**
-     * A haptic, by exact2's number for it (`presenter::Haptic`), as the constant of Android's that fits. Android
-     * names occasions, not strengths; under them are a texture tick, a tick, a click, a heavy click and a double
-     * click, which is what these choose by:
-     *
-     * - `selection` (1): a segment's tick (Android 14), else the clock's;
-     * - `impact-light` (2) a tick, `impact-medium` (3) a click, `impact-heavy` (4) a heavy click, `impact-soft` (5)
-     *   the texture tick. `impact-rigid` (6) has none of its own (no click is sharper than another) and is the click;
-     * - `success` (7) is confirm and `error` (9) reject. `warning` (8) has none of its own and is reject too.
-     *
-     * The system plays it or not by the person's touch feedback setting.
-     */
+    /** A haptic, by exact2's number for it (`presenter::Haptic`), on the vibrator ([AppHaptics], Pinkoo's fork, C13). */
     private fun haptic(kind: Int) {
-        val c = when (kind) {
-            1 -> if (Build.VERSION.SDK_INT >= 34) HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK
-            2 -> HapticFeedbackConstants.CONTEXT_CLICK
-            3, 6 -> HapticFeedbackConstants.VIRTUAL_KEY
-            4 -> HapticFeedbackConstants.LONG_PRESS
-            5 -> HapticFeedbackConstants.TEXT_HANDLE_MOVE
-            7 -> if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else Legacy.haptic(kind)
-            8, 9 -> if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else Legacy.haptic(kind)
-            else -> return
-        }
-        val played = view?.performHapticFeedback(c)
-        if (log) Log.i(TAG, "haptic $kind: performHapticFeedback($c) = $played")
+        val played = (appHaptics ?: AppHaptics(activity).also { appHaptics = it }).play(kind)
+        if (log) Log.i(TAG, "haptic $kind: $played")
     }
 
     /** The clipboard. From Android 13 the system shows what was copied itself. */

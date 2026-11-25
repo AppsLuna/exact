@@ -8,7 +8,6 @@ import android.graphics.Rect
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.view.Display
-import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.Window
 import android.view.WindowInsets
@@ -112,10 +111,6 @@ object Legacy {
         val name = info.contentDescription ?: info.text
         info.contentDescription = if (name.isNullOrEmpty()) value else "$name, $value"
     }
-
-    /** `HapticFeedbackConstants.CONFIRM` (7) and `REJECT` (8, 9), API 30, as AndroidX's
-     * `HapticFeedbackConstantsCompat` falls back for them. */
-    internal fun haptic(kind: Int): Int = if (kind == 7) HapticFeedbackConstants.VIRTUAL_KEY else HapticFeedbackConstants.LONG_PRESS
 
     /** Material 3's baseline scheme (no dynamic colour before Android 12), [Palette]'s roles in its order: light, then
      * dark. They are Compose Material 3's `lightColorScheme()` and `darkColorScheme()` at the pinned version, which the
