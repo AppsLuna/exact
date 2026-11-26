@@ -1,5 +1,7 @@
 // "Abrir quando eu desbloquear", an extra under Tela cheia: from the full-screen step until her first unlock, the
 // dose's answer or promise, or the next step (at most 2 h, the core's `until`), the nag route opens once at her unlock.
+// The same wait follows an alarm that rang without its full screen (no access), the switch on or off: the unlock that
+// silences it opens the nag screen (`Group.standIn`, Glauco 2026-11-25).
 // `ACTION_USER_PRESENT` reaches only a receiver registered at runtime, and a cached app gets such broadcasts only once it
 // leaves the cached state (Android 14 and later) and may be killed meanwhile, so the ring service holds the process
 // for the wait. The start comes from the background, which Android allows an app holding "Display over other apps"

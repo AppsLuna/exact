@@ -14,7 +14,8 @@ package pinkoo.nag
 /**
  * A dose time's steps, softest first. [NOTIFY] at the dose time; [AGAIN] (De novo, with the bubble when it is on);
  * [FULL] (Tela cheia, once per dose); [ALARM] ("Só se passar de tudo"; "Já na hora" folds into [NOTIFY]); then up to 3
- * [REPEAT]s; [DEADLINE] at a promise's deadline, which is not one of the repeats.
+ * [REPEAT]s; [DEADLINE] at a promise's deadline, which is not one of the repeats: her sound, the bubble and the full
+ * screen when they are on, never the alarm.
  */
 enum class Step { NOTIFY, AGAIN, FULL, ALARM, REPEAT, DEADLINE }
 
@@ -30,19 +31,24 @@ enum class Step { NOTIFY, AGAIN, FULL, ALARM, REPEAT, DEADLINE }
  * - [channel]: the sound of the earliest firing group's first dose (`NagDose.sound`: a preset's id, `vibrate`, `silent`,
  *   or a phone sound's canonical address), which names her reminder channel; the surface maps it to the channel's id.
  * - [sounding]: her sound plays with it, posted anew on her reminder channel. False for a refresh; for the alarm and a
- *   step [folded] into it (the ring is the only sound); for the full screen (silent over the lock screen: where the
- *   surface falls back to a heads-up, it sounds it); and in [front] (the app plays her sound itself).
- * - [fullScreen]: a firing group enters Tela cheia and its doses haven't had it, or a firing group rings the alarm (never
- *   in [front]). For Tela cheia the surface attaches the full-screen intent only while the phone is locked or dark, Do
- *   Not Disturb is off and the access is granted; otherwise it posts on her reminder channel, sounding. Either way the
- *   core has already counted the dose's full screen. For the alarm, every time it rings, it rides on the alarm's own
- *   notification whenever the access is granted (Android opens the nag route over a locked or dark phone and shows a
- *   heads-up to one in use; Do Not Disturb treats it as the alarm it is), and it counts as no Tela cheia.
- * - [alarm]: an alarm rings now (with exact access only): the post is the alarm's own notification (`pinkoo.nag`, public,
- *   "Parar"), with the full-screen intent when it is the fire that rings ([fullScreen]).
- * - [bubble]: some open group is inside its De novo step with Bolinha on and wasn't sent to the nest.
- * - [folded]: a step rides on the alarm's notification ("Já na hora", a promise's deadline for such a dose, another dose
- *   time's step while it rings): silent, so the ring is the only sound.
+ *   step [folded] into it (the ring is the only sound); for Tela cheia (silent over the lock screen: where the surface
+ *   falls back to a heads-up, it sounds it); and in [front] (the app plays her sound itself). A promise's deadline sounds
+ *   with its full screen too: it brings everything but the alarm (Glauco, 2026-11-25).
+ * - [fullScreen]: a firing group enters Tela cheia and its doses haven't had it, reaches a promise's deadline with Tela
+ *   cheia on (even after the dose had it; it spends nothing), or rings the alarm (never in [front]). For Tela cheia and
+ *   a deadline the surface attaches the full-screen intent only while the phone is locked or dark, Do Not Disturb is off
+ *   and the access is granted; otherwise it posts on her reminder channel, sounding. Either way the core has already
+ *   counted the dose's Tela cheia. For the alarm, every time it rings, it rides on the alarm's own notification whenever
+ *   the access is granted (Android opens the nag route over a locked or dark phone and shows a heads-up to one in use;
+ *   Do Not Disturb treats it as the alarm it is), and it counts as no Tela cheia. Without the access the bubble and the
+ *   opening at her unlock stand in for it ([bubble], [Out.waitUnlock]; `Group.standIn`).
+ * - [alarm]: an alarm rings now (with exact access only; never at a promise's deadline): the post is the alarm's own
+ *   notification (`pinkoo.nag`, public, "Parar"), with the full-screen intent when it is the fire that rings
+ *   ([fullScreen]).
+ * - [bubble]: some open group's step brings the bubble and it wasn't sent to the nest: De novo or a promise's deadline
+ *   with Bolinha on, or an alarm that rang without its full screen while Pinkoo may draw over other apps.
+ * - [folded]: a step rides on the alarm's notification ("Já na hora", another dose time's step while it rings): silent,
+ *   so the ring is the only sound.
  * - [front]: it fired with the app in front (decision 17): the waiting channel, no heads-up, no full-screen intent, to its
  *   end. The app reads it in `nagState().front` and acts.
  * - [title], [line]: the plan's texts filled ("Hora de tomar: {names}", the waiting state's on a refresh) and the
@@ -68,7 +74,8 @@ data class Post(val nag: Int, val groups: List<String>, val step: Step, val keys
  * - [stopRing]: no alarm rings ([why] for the log: `step`, `timeout`, `stop`, `dismissed`, `notNow`, `opened`,
  *   `answered`, …). Called at every change while none rings.
  * - [bubble]: the bubble shows for [Post], or goes with null.
- * - [waitUnlock]: open the nag route at her first unlock until [until] (null: stop waiting).
+ * - [waitUnlock]: open the nag route at her first unlock until [until] (null: stop waiting): after Tela cheia with
+ *   "Abrir quando eu desbloquear" on, and after an alarm that rang without its full screen.
  * - [confirm]: the notification's "Agora não" answered: [nag]'s post turns, silently, into [text] for 5 s, then goes;
  *   the core leaves the reminder alone meanwhile.
  */

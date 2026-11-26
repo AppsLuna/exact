@@ -1,5 +1,7 @@
-// Bolinha, at De novo: Bolota's face in a small round window over her apps (`TYPE_APPLICATION_OVERLAY`, which she
-// allows as "Aparecer por cima"), plus a speech balloon in a second window, sized to its text, holding the step's line.
+// Bolinha, at De novo and at a promise's deadline: Bolota's face in a small round window over her apps
+// (`TYPE_APPLICATION_OVERLAY`, which she allows as "Aparecer por cima"), plus a speech balloon in a second window,
+// sized to its text, holding the step's line. It also comes with an alarm that rang without its full screen (no
+// access), Bolinha on or off, so she finds the reminder after silencing it (`Group.standIn`, Glauco 2026-11-25).
 //
 // - The balloon is `FLAG_NOT_TOUCHABLE` and drawn at an alpha of 0.8 or less: Android 12's untrusted-touch rule passes
 //   a touch through an overlay only when the windows over that point are that see-through (`InputManager`'s maximum

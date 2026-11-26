@@ -18,6 +18,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowAlarmManager
 import org.robolectric.shadows.ShadowPowerManager
+import org.robolectric.shadows.ShadowSettings
 import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -542,9 +543,10 @@ internal class EngineTest : CoreCase() {
         assertEquals(at("2026-11-18T20:00"), armed(Chain.STEP)!!.triggerAtTime)
     }
 
-    /** A promise: nothing until its deadline (no step, no bubble, no repeat), then the notification at the step she was
-     * on; for a "Já na hora" dose, the alarm clock rings at the deadline with it folded in. */
-    @Test fun aPromisesDeadlineIsArmedAndAJaNaHoraDoseRingsAtIt() {
+    /** A promise: nothing until its deadline (no step, no bubble, no repeat), then everything but the alarm (Glauco,
+     * 2026-11-25): her sound, the bubble and the full screen. A "Já na hora" dose's deadline is code 0's, not the alarm
+     * clock's, and rings nothing. */
+    @Test fun aPromisesDeadlineIsArmedAndNeverRings() {
         Engine.schedule(app, NagFixtures.plan(pill8), at("2026-11-18T19:00"))
         deliver(Chain.STEP)
         Engine.resolve(app, listOf("a@2026-11-18T20:00"), "promised", at("2026-11-18T20:20"), at("2026-11-18T20:01"))
@@ -554,16 +556,118 @@ internal class EngineTest : CoreCase() {
         deliver(Chain.STEP)
         assertEquals(Step.DEADLINE, out.posts.last().step)
         assertEquals("You promised 20:20", out.posts.last().line)
+        assertTrue(out.posts.last().let { it.sounding && it.bubble && it.fullScreen && !it.alarm })
+        assertEquals("the bubble lives until the next step", Step.DEADLINE, out.bubble!!.step)
         NagFixtures.clear(app); out.reset()
         val d = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "onTime")
         Engine.schedule(app, NagFixtures.plan(d), at("2026-11-18T19:00"))
         deliver(Chain.ALARM)
         Engine.resolve(app, listOf("a@2026-11-18T20:00"), "promised", at("2026-11-18T20:30"), at("2026-11-18T20:00") + 20_000)
-        assertEquals(at("2026-11-18T20:30"), armed(Chain.ALARM)!!.triggerAtTime)
-        deliver(Chain.ALARM)
-        assertEquals(Step.DEADLINE, out.posts.last().step)
-        assertTrue(out.posts.last().folded)
-        assertEquals("ring:${out.posts.last().nag}", out.calls.last())
+        assertNull("no alarm clock for the deadline", armed(Chain.ALARM))
+        assertEquals(at("2026-11-18T20:30"), armed(Chain.STEP)!!.triggerAtTime)
+        assertTrue("the app reads no alarm ahead", Rules.doses(Store.plan(app)!!, Store.state(app), true).single().isNull("alarmAt"))
+        val rings = out.calls.count { it.startsWith("ring:") }
+        deliver(Chain.STEP)
+        val p = out.posts.last()
+        assertEquals(Step.DEADLINE, p.step)
+        assertTrue("her sound, not folded", p.sounding && !p.folded && !p.alarm)
+        assertTrue("the bubble and the full screen", p.bubble && p.fullScreen)
+        assertEquals("it rings nothing", rings, out.calls.count { it.startsWith("ring:") })
+        assertFalse("it spends no Tela cheia", Store.state(app).doses.values.single().full)
+        assertNull(armed(Chain.ALARM))
+        run(at("2026-11-18T21:05"))
+        assertEquals("Tela cheia still comes", listOf(Step.AGAIN, Step.FULL), out.posts.takeLast(2).map { it.step })
+        assertTrue(out.posts.last().fullScreen)
+    }
+
+    // MARK: the alarm without its full screen (Glauco, 2026-11-25)
+
+    private val alarm8 = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "afterAll")
+
+    /**
+     * Without full-screen access (Android 14 here) and with "Aparecer por cima", the alarm brings the bubble with its
+     * ring and the opening at her unlock, Bolinha and "Abrir quando eu desbloquear" off: on her S24 it rang, she unlocked
+     * to stop it and couldn't find Pinkoo. The unlock that silences it doesn't end the wait; the opening does, once; both
+     * last until the next step, across a process death.
+     */
+    @Test fun anAlarmWithoutItsFullScreenArmsTheBubbleAndTheUnlockInstead() {
+        ShadowSettings.setCanDrawOverlays(true)
+        assertFalse(FullScreen.allowed(app))
+        Engine.schedule(app, NagFixtures.plan(alarm8, bubble = false, unlock = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:35"))
+        assertNull("no bubble before it, Bolinha off", out.bubble)
+        assertNull(out.unlock)
+        run(at("2026-11-18T20:50"))
+        val ring = out.posts.last()
+        assertEquals(Step.ALARM, ring.step)
+        assertTrue(ring.alarm && ring.bubble)
+        assertTrue(g20().standIn)
+        assertEquals(Step.ALARM, out.bubble!!.step)
+        assertEquals("until the next step (the first repeat)", at("2026-11-18T21:20"), out.unlock)
+        Engine.silenced(app, "unlock", at("2026-11-18T20:51"))
+        assertNull(out.ringing)
+        assertEquals("the unlock that silences it still opens the nag screen", at("2026-11-18T21:20"), out.unlock)
+        Engine.restore(app, at("2026-11-18T20:51"))
+        assertNotNull("kept across a process death", out.bubble)
+        assertEquals(at("2026-11-18T21:20"), out.unlock)
+        Engine.unlocked(app, at("2026-11-18T20:52"))
+        assertNull("opened once", out.unlock)
+        assertNotNull("the bubble stays for its step", out.bubble)
+        Engine.restore(app, at("2026-11-18T20:53"), front = true)
+        assertNull("the resume after it waits for nothing", out.unlock)
+        run(at("2026-11-18T21:20"))
+        assertEquals(Step.REPEAT, out.posts.last().step)
+        assertNull("gone at the next step", out.bubble)
+        assertFalse(g20().standIn)
+    }
+
+    /** "Agora não" while it rings ends both, as for De novo's bubble and Tela cheia's unlock. */
+    @Test fun agoraNaoEndsTheAlarmsStandIns() {
+        ShadowSettings.setCanDrawOverlays(true)
+        Engine.schedule(app, NagFixtures.plan(alarm8, bubble = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:50"))
+        assertNotNull(out.bubble)
+        Engine.notNowKeys(app, listOf("a@2026-11-18T20:00"), at("2026-11-18T20:51"))
+        assertNull(out.bubble)
+        assertNull(out.unlock)
+    }
+
+    /** Without "Aparecer por cima" nothing changes: the alarm rings with its notification alone, and no wake is added. */
+    @Test fun withoutTheOverlayAnAlarmWithoutItsFullScreenChangesNothing() {
+        Engine.schedule(app, NagFixtures.plan(alarm8, bubble = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:50"))
+        assertEquals(Step.ALARM, out.posts.last().step)
+        assertFalse(out.posts.last().bubble)
+        assertFalse(g20().standIn)
+        assertNull(out.bubble)
+        assertNull(out.unlock)
+        assertEquals("the next wake is the ring's cap", at("2026-11-18T20:51"), armed(Chain.STEP)!!.triggerAtTime)
+    }
+
+    /** In front the app opens the nag screen itself: nothing stands in. */
+    @Test fun inFrontAnAlarmWithoutItsFullScreenNeedsNoStandIn() {
+        ShadowSettings.setCanDrawOverlays(true)
+        Engine.schedule(app, NagFixtures.plan(alarm8, bubble = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:35"))
+        Engine.appInFront = true
+        run(at("2026-11-18T20:50"))
+        assertEquals(Step.ALARM, out.posts.last().step)
+        assertFalse(g20().standIn)
+        assertNull(out.bubble)
+        assertNull(out.unlock)
+    }
+
+    /** With full-screen access (Android 13 allows it by default) the alarm opens its own screen: nothing stands in. */
+    @Config(sdk = [33])
+    @Test fun withFullScreenAccessTheAlarmNeedsNoStandIn() {
+        ShadowSettings.setCanDrawOverlays(true)
+        assertTrue(FullScreen.allowed(app))
+        Engine.schedule(app, NagFixtures.plan(alarm8, bubble = false), at("2026-11-18T19:00"))
+        run(at("2026-11-18T20:50"))
+        assertTrue(out.posts.last().let { it.step == Step.ALARM && it.fullScreen })
+        assertFalse(g20().standIn)
+        assertNull(out.bubble)
+        assertNull(out.unlock)
     }
 
     @Test fun eventsWaitUntilTheAppAcknowledgesThemAndTheOldestGoBeyondAThousand() {

@@ -29,8 +29,9 @@ class RulesTest {
     private fun key(d: JSONObject) = d.getString("key")
 
     /** Every fire of [p] from [from] to [to] with nobody answering, as `time step` lines, by the alarms [Rules.next]
-     * sets (exact access unless [exact] is false). */
-    private fun drive(p: Plan, st: State, from: Long, to: Long, exact: Boolean = true, posts: MutableList<Post>? = null): List<String> {
+     * sets (exact access unless [exact] is false; [standIn]: an alarm can't open its screen, [Rules.fire]). */
+    private fun drive(p: Plan, st: State, from: Long, to: Long, exact: Boolean = true, posts: MutableList<Post>? = null,
+        standIn: Boolean = false): List<String> {
         val fired = ArrayList<String>()
         var t = from
         repeat(200) {
@@ -41,7 +42,7 @@ class RulesTest {
             val ev = ArrayList<Event>()
             Rules.lapse(p, st, t, ev, sp)
             Rules.ringOut(p, st, t, ev)
-            val fires = Rules.fire(p, st, Rules.due(p, st, t, exact, true, sp), t, ev, exact)
+            val fires = Rules.fire(p, st, Rules.due(p, st, t, exact, true, sp), t, ev, exact, standIn)
             if (fires.isNotEmpty()) {
                 val post = Rules.post(p, st, st.nag, fires, false, t, sp)
                 posts?.add(post)
@@ -444,6 +445,59 @@ class RulesTest {
         assertNull("'Agora não': done", Rules.unlock(slow, st2, at("2026-11-18T20:13"), true, sp))
     }
 
+    /**
+     * An alarm that rings without its screen (no full-screen access, the app not in front) while Pinkoo may draw over
+     * other apps ([Rules.fire]'s `standIn`; Glauco, 2026-11-25): the bubble shows with the ring, Bolinha off, and the nag
+     * screen opens at her unlock, "Abrir quando eu desbloquear" off, both until the next step. Silencing it keeps them;
+     * the opening ends the wait (once), the nest the bubble, "Agora não" both. With its screen, neither.
+     */
+    @Test fun anAlarmWithoutItsScreenBringsTheBubbleAndTheOpeningAtTheUnlock() {
+        val d = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "afterAll")
+        val p = plan(d, bubble = false, unlock = false)
+        val st = State()
+        Rules.merge(p, st, 0)
+        val posts = ArrayList<Post>()
+        assertEquals(listOf("20:00 notify", "20:20 again", "20:35 full full", "20:50 alarm alarm full"),
+            drive(p, st, 0, at("2026-11-18T20:50"), posts = posts, standIn = true))
+        val g = st.groups.values.single()
+        assertEquals("only the ring stands in", listOf(false, false, false, true), posts.map { it.bubble })
+        assertTrue(g.standIn)
+        assertEquals(Step.ALARM, Rules.bubble(p, st, at("2026-11-18T20:50"), sp)!!.step)
+        assertEquals("until the next step", at("2026-11-18T21:20"), Rules.unlock(p, st, at("2026-11-18T20:50"), true, sp))
+        // Silenced (her unlock, "Parar", the power key): both stay.
+        assertTrue(Rules.silence(st))
+        assertNotNull(Rules.bubble(p, st, at("2026-11-18T20:51"), sp))
+        assertEquals(at("2026-11-18T21:20"), Rules.unlock(p, st, at("2026-11-18T20:51"), true, sp))
+        // The opening at her unlock, once.
+        assertTrue(Rules.unlocked(st))
+        assertNull(Rules.unlock(p, st, at("2026-11-18T20:52"), true, sp))
+        assertFalse(Rules.unlocked(st))
+        assertNotNull("the bubble stays for its step", Rules.bubble(p, st, at("2026-11-18T20:52"), sp))
+        Rules.nested(p, st, g.nag)
+        assertNull("sent to the nest", Rules.bubble(p, st, at("2026-11-18T20:53"), sp))
+        assertEquals(listOf("21:20 repeat"), drive(p, st, at("2026-11-18T20:53"), at("2026-11-18T21:20"), standIn = true))
+        assertFalse("the next step ends it", g.standIn)
+        // "Já na hora": from the dose time to De novo; "Agora não" ends both.
+        val onTime = plan(NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "onTime"), bubble = false)
+        val st2 = State()
+        Rules.merge(onTime, st2, 0)
+        val first = ArrayList<Post>()
+        drive(onTime, st2, 0, at("2026-11-18T20:00"), posts = first, standIn = true)
+        assertTrue(first.single().let { it.alarm && it.folded && it.bubble })
+        assertEquals("until De novo", at("2026-11-18T20:20"), Rules.unlock(onTime, st2, at("2026-11-18T20:00"), true, sp))
+        assertEquals(at("2026-11-18T20:20"), Rules.bubbleEnd(onTime, st2, st2.groups.values.single(), sp))
+        Rules.notNow(onTime, st2, st2.groups.values, at("2026-11-18T20:05"), ArrayList(), sp)
+        assertNull(Rules.bubble(onTime, st2, at("2026-11-18T20:05"), sp))
+        assertNull(Rules.unlock(onTime, st2, at("2026-11-18T20:05"), true, sp))
+        // With its screen, neither.
+        val st3 = State()
+        Rules.merge(p, st3, 0)
+        drive(p, st3, 0, at("2026-11-18T20:50"))
+        assertFalse(st3.groups.values.single().standIn)
+        assertNull(Rules.bubble(p, st3, at("2026-11-18T20:50"), sp))
+        assertNull(Rules.unlock(p, st3, at("2026-11-18T20:50"), true, sp))
+    }
+
     /** A swipe is kept, not counted: the post stays away until the group's next step, and another group's post
      * doesn't name it meanwhile. */
     @Test fun aSwipeKeepsItsGroupAwayUntilItsNextStep() {
@@ -492,8 +546,9 @@ class RulesTest {
         assertEquals(listOf("08:20 again"), drive(p, st, at("2026-11-18T08:01"), at("2026-11-18T08:29"), posts = posts))
         assertEquals("the other alone", listOf("Pill B"), posts.single().names)
         assertEquals(listOf(1, 2), Rules.doses(p, st, true, sp).map { it.getInt("fires") })
-        // The deadline comes before the full screen (08:35): one post for both, and the thread goes on one gap later.
-        assertEquals(listOf("08:30 deadline"), drive(p, st, at("2026-11-18T08:29"), at("2026-11-18T08:31"), posts = posts))
+        // The deadline comes before the full screen (08:35): one post for both, with the full screen (Tela cheia on), and
+        // the thread goes on one gap later.
+        assertEquals(listOf("08:30 deadline full"), drive(p, st, at("2026-11-18T08:29"), at("2026-11-18T08:31"), posts = posts))
         assertEquals(listOf("Pill A", "Pill B"), posts.last().names)
         assertEquals("the rung is the most any dose it reminds had", 2, posts.last().rung)
         assertEquals("You promised 08:30", posts.last().line)
@@ -528,6 +583,33 @@ class RulesTest {
         Rules.resolve(p, st, listOf(key(pillB)), "taken", null, at("2026-11-18T08:21"), sp)
         assertEquals("promised", g.state)
         assertEquals(at("2026-11-18T08:30"), Rules.next(p, st, at("2026-11-18T08:21"), true, sp).step)
+    }
+
+    /**
+     * A promise's deadline brings everything but the alarm, "Já na hora" included (Glauco, 2026-11-25): code 0 wakes for
+     * it, never the alarm clock, and the app reads no alarm ahead; her sound, the bubble until the next step (the nest
+     * sends it away), and the full screen even after the dose's Tela cheia.
+     */
+    @Test fun aPromisesDeadlineBringsEverythingButTheAlarm() {
+        val d = NagFixtures.dose("a@2026-11-18T20:00", "2026-11-18T20:00", "2026-11-19T08:00", "Pill A", alarm = "onTime")
+        val p = plan(d)
+        val st = State()
+        Rules.merge(p, st, 0)
+        assertEquals(listOf("20:00 notify alarm full", "20:20 again", "20:35 full full"), drive(p, st, 0, at("2026-11-18T20:35")))
+        assertTrue(st.doses.values.single().full)
+        Rules.resolve(p, st, listOf(key(d)), "promised", at("2026-11-18T21:00"), at("2026-11-18T20:40"), sp)
+        val arm = Rules.next(p, st, at("2026-11-18T20:40"), true, sp)
+        assertEquals("code 0 wakes for it", at("2026-11-18T21:00"), arm.step)
+        assertNull("never the alarm clock", arm.alarm)
+        assertTrue(Rules.doses(p, st, true, sp).single().isNull("alarmAt"))
+        val posts = ArrayList<Post>()
+        assertEquals(listOf("21:00 deadline full"), drive(p, st, at("2026-11-18T20:40"), at("2026-11-18T21:00"), posts = posts))
+        assertTrue(posts.single().let { it.sounding && it.bubble && it.fullScreen && !it.alarm && !it.folded })
+        val g = st.groups.values.single()
+        assertEquals("not ringing", "pending", g.state)
+        assertEquals("the bubble until the next step", at("2026-11-18T21:30"), Rules.bubbleEnd(p, st, g, sp))
+        Rules.nested(p, st, g.nag)
+        assertNull("sent to the nest", Rules.bubble(p, st, at("2026-11-18T21:01"), sp))
     }
 
     @Test fun aPromiseNeverGoesPastTheMissAndTheLastCounts() {

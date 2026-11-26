@@ -42,16 +42,20 @@ internal class Group(
     var unlocked: Boolean = false,
     /** A step came due with no notification able to reach her: it waits, silently, for them to come back. */
     var muted: Boolean = false,
+    /** Its last fire rang the alarm without the alarm's screen (no full-screen access, the app not in front) while Pinkoo
+     * may draw over other apps: the bubble shows with the ring and the nag screen opens at her unlock in its place, until
+     * the next step (Glauco, 2026-11-25). */
+    var standIn: Boolean = false,
 ) {
     fun json(): JSONObject = JSONObject().put("group", group).put("state", state).put("step", step?.name ?: JSONObject.NULL)
         .put("last", last?.name ?: JSONObject.NULL).put("repeats", repeats).put("fires", fires).put("nag", nag)
         .put("nextAt", nextAt ?: JSONObject.NULL).put("until", until ?: JSONObject.NULL).put("lastFiredAt", lastFiredAt ?: JSONObject.NULL)
-        .put("dismissed", dismissed).put("nested", nested).put("unlocked", unlocked).put("muted", muted)
+        .put("dismissed", dismissed).put("nested", nested).put("unlocked", unlocked).put("muted", muted).put("standIn", standIn)
 
     companion object {
         fun from(o: JSONObject) = Group(o.getString("group"), o.optString("state", "upcoming"), step(o, "step"), step(o, "last"),
             o.optInt("repeats"), o.optInt("fires"), o.optInt("nag"), long(o, "nextAt"), long(o, "until"), long(o, "lastFiredAt"),
-            o.optBoolean("dismissed"), o.optBoolean("nested"), o.optBoolean("unlocked"), o.optBoolean("muted")).also {
+            o.optBoolean("dismissed"), o.optBoolean("nested"), o.optBoolean("unlocked"), o.optBoolean("muted"), o.optBoolean("standIn")).also {
                 // A state of version 2 (the ladder of ignores): its counts, which [Rules.upgrade] maps to a step.
                 it.ignores = o.optInt("ignores"); it.ignoredNag = o.optInt("ignoredNag")
             }

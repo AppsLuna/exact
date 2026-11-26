@@ -134,24 +134,25 @@ internal class ShadeTest : SurfaceCase() {
     /**
      * Item 17: Tela cheia posts with its full-screen intent on the silent channel only while the phone is locked or dark
      * and Do Not Disturb is off. With the phone in use, Do Not Disturb on, or no access, it is her reminder posted anew,
-     * sounding, as a heads-up.
+     * sounding, as a heads-up. A promise's deadline with Tela cheia on (Glauco, 2026-11-25) carries the same intent on her
+     * reminder channel, sounding: everything but the alarm.
      */
     @Config(sdk = [33]) // full-screen access allowed by default on Android 12 and 13
     @Test fun theFullScreenOpensOnlyOnALockedOrDarkPhoneWithDoNotDisturbOff() {
         val o = out()
         phone(locked = true, on = true)
-        o.post(post(1, Step.FULL, fullScreen = true))
+        o.post(post(1, Step.FULL, sounding = false, fullScreen = true))
         var n = nag()!!.notification
         assertEquals(Shade.CH_NAG, n.channelId)
         assertNotNull(n.fullScreenIntent)
         assertEquals(Notification.CATEGORY_REMINDER, n.category)
         // Dark and unlocked: the same.
         phone(locked = false, on = false)
-        o.post(post(2, Step.FULL, fullScreen = true))
+        o.post(post(2, Step.FULL, sounding = false, fullScreen = true))
         assertNotNull(nag()!!.notification.fullScreenIntent)
         // In use: her reminder, sounding.
         phone(locked = false, on = true)
-        o.post(post(3, Step.FULL, fullScreen = true))
+        o.post(post(3, Step.FULL, sounding = false, fullScreen = true))
         n = nag()!!.notification
         assertEquals("pinkoo.remind.sininho", n.channelId)
         assertNull(n.fullScreenIntent)
@@ -159,16 +160,32 @@ internal class ShadeTest : SurfaceCase() {
         // Do Not Disturb on, the phone locked: her reminder too.
         phone(locked = true, on = false)
         nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-        o.post(post(4, Step.FULL, fullScreen = true))
+        o.post(post(4, Step.FULL, sounding = false, fullScreen = true))
         assertNull(nag()!!.notification.fullScreenIntent)
         assertEquals("pinkoo.remind.sininho", nag()!!.notification.channelId)
         nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
         // A refresh never re-attaches it.
-        o.post(post(5, Step.FULL, fullScreen = true))
+        o.post(post(5, Step.FULL, sounding = false, fullScreen = true))
         assertNotNull(nag()!!.notification.fullScreenIntent)
         o.refresh(post(5, Step.FULL, sounding = false, fullScreen = true, line = "a1"))
         assertNull(nag()!!.notification.fullScreenIntent)
         assertEquals("pinkoo.remind.sininho", nag()!!.notification.channelId)
+        // A promise's deadline: the full screen on her channel, sounding, with the reminder's actions.
+        phone(locked = true, on = false)
+        o.post(post(6, Step.DEADLINE, sounding = true, fullScreen = true, line = "You promised 08:30"))
+        n = nag()!!.notification
+        assertEquals("pinkoo.remind.sininho", n.channelId)
+        assertNotNull(n.fullScreenIntent)
+        assertFalse(quiet(n))
+        assertEquals(Notification.CATEGORY_REMINDER, n.category)
+        assertEquals(3, n.actions.size)
+        // With the phone in use: her reminder, sounding, as a heads-up.
+        phone(locked = false, on = true)
+        o.post(post(7, Step.DEADLINE, sounding = true, fullScreen = true))
+        n = nag()!!.notification
+        assertEquals("pinkoo.remind.sininho", n.channelId)
+        assertNull(n.fullScreenIntent)
+        assertFalse(quiet(n))
     }
 
     /** Without full-screen access (Android 14 and later, a store install: Robolectric's default) the step is her

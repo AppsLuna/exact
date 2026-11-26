@@ -22,7 +22,10 @@ otherwise.
    too: the alarm's notification is public); the power key (the press that turns the screen on); unlocking. One UI 7
    and later show lock-screen notifications as icons by default: check with the notification card shown as well.
    Unlocked: a swipe on its notification, opening Pinkoo from it, and on Pinkoo's own screen a touch or a volume key.
-   The 60 s cap. Nothing else stops it, and no copy promises more.
+   The 60 s cap. Nothing else stops it, and no copy promises more. Without full-screen access (Settings › Apps ›
+   Pinkoo › full-screen notifications off) and with "Aparecer por cima", Bolinha and "Abrir quando eu desbloquear" off:
+   the bubble comes with the ring, and the unlock that silences it opens the nag screen, once; the bubble stays until
+   the next step. Without "Aparecer por cima" the ring comes with its notification alone (Glauco, 2026-11-25).
 4. **The balloon on a slow phone (the A06).** At De novo, with WhatsApp open: the balloon shows Bolota's line for about
    6 s and her taps under it reach WhatsApp (Android 12's untrusted-touch rule passes them through a window drawn at
    0.8 or less); a tap on the face opens the nag screen; dragged into the nest it stays away for its step, even if One
@@ -49,7 +52,9 @@ otherwise.
    `appops`.)
 10. **The promise as a Live Update.** A pinky promise shows the deadline in the Now Bar and the status-bar chip, counting
     down; nothing else comes until it. Dismissing it answers nothing and it doesn't come back for that promise. At the
-    deadline the notification comes again (the alarm instead, for a "Já na hora" medication).
+    deadline everything but the alarm (Glauco, 2026-11-25): the notification with her sound, the bubble with Bolinha on,
+    and the nag screen over the lock screen with Tela cheia on, even after the dose had its Tela cheia; never the alarm,
+    also for a "Já na hora" medication.
 11. **The experience test.** Como eu te lembro › "Sentir meu lembrete": each step she has on, locked and unlocked;
     "Testar sem som" on the "Só vibrar" channel; the full screen 5 s after the screen goes off; the alarm sample stops
     at 10 s, by "Parar", the unlock or the power key. Nothing is recorded.

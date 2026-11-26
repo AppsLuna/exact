@@ -305,9 +305,11 @@ internal object Shade {
 
     /**
      * How [p] shows. The alarm's own notification while it rings (or at its post: with the full-screen intent when its
-     * fire rings, [build]); the full screen when a fresh post enters Tela cheia and Android would open it (the access
-     * granted, the phone locked or dark, Do Not Disturb off); otherwise her reminder channel, or the waiting channel in
-     * front (decision 17: no heads-up over the app).
+     * fire rings, [build]); the full screen when a fresh post enters Tela cheia, or a promise's deadline with Tela cheia
+     * on, and Android would open it (the access granted, the phone locked or dark, Do Not Disturb off): Tela cheia's on
+     * the silent channel, a deadline's on her reminder channel, sounding ([Post.sounding]: everything but the alarm,
+     * Glauco 2026-11-25); otherwise her reminder channel, or the waiting channel in front (decision 17: no heads-up over
+     * the app).
      */
     private fun look(c: Context, plan: Plan, p: Post, fresh: Boolean): Look {
         val lead = p.groups.firstOrNull() ?: ""
@@ -318,7 +320,8 @@ internal object Shade {
         return when {
             alarm -> Look(Kind.ALARM, if (p.front) CH_WAITING else CH_NAG, plan.texts.alarmTitle, plan.texts.alarmBody, "", at, p.rung, lead, p.nag, plan.made)
             fresh && p.fullScreen && !p.front && FullScreen.allowed(c) && FullScreen.now(c) ->
-                Look(Kind.FULL, CH_NAG, p.title, p.line.ifEmpty { sub }, sub, at, p.rung, lead, p.nag, plan.made)
+                Look(Kind.FULL, if (p.sounding) Remind.ensure(c, p.channel, plan.texts.channels[p.channel]) else CH_NAG,
+                    p.title, p.line.ifEmpty { sub }, sub, at, p.rung, lead, p.nag, plan.made)
             else -> Look(Kind.REMIND, if (p.front) CH_WAITING else Remind.ensure(c, p.channel, plan.texts.channels[p.channel]),
                 p.title, p.line.ifEmpty { sub }, sub, at, p.rung, lead, p.nag, plan.made)
         }

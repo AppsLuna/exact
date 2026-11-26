@@ -149,13 +149,10 @@ internal object Rules {
         return t
     }
 
-    /** The earliest promise deadline among [g]'s open doses, or null with none. */
+    /** The earliest promise deadline among [g]'s open doses, or null with none. It never rings the alarm, "Já na hora"
+     * included (Glauco, 2026-11-25: "como já tá atrasado… ativar tudo exceto alarme pra não ficar tão chato"): it
+     * brings her sound, the bubble and the full screen ([fire]), and the alarm stays a step of the thread. */
     private fun deadline(plan: Plan, st: State, g: Group): Long? = open(plan, st, g).mapNotNull { until(st, it) }.minOrNull()
-
-    /** Whether the deadline of [g] due at [now] rings the alarm: one of its doses whose promise ends then chose "Já na
-     * hora" (with exact access). */
-    private fun deadlineRings(plan: Plan, st: State, g: Group, now: Long, exact: Boolean): Boolean =
-        exact && open(plan, st, g).any { d -> (until(st, d) ?: Long.MAX_VALUE) <= now && d.alarm == Alarm.ON_TIME }
 
     // MARK: the plan and the state
 
@@ -279,8 +276,8 @@ internal object Rules {
     /**
      * The groups due a reminder at [now], each with its step: the alarm when its time came (and the steps it passed are
      * skipped), else its next step when due (without exact access the alarm step comes as a notification), else a
-     * promise's deadline. With [alarms] false (the inexact backup's wake while exact access holds) an alarm is left to
-     * its own alarm clock, which alone may start the ring from the background.
+     * promise's deadline, which never rings. With [alarms] false (the inexact backup's wake while exact access holds) an
+     * alarm is left to its own alarm clock, which alone may start the ring from the background.
      */
     fun due(plan: Plan, st: State, now: Long, exact: Boolean, alarms: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<Due> =
         st.groups.values.mapNotNull { g ->
@@ -294,21 +291,24 @@ internal object Rules {
                 deadline != null -> Step.DEADLINE
                 else -> null
             } ?: return@mapNotNull null
-            val rings = ring != null || (due == Step.DEADLINE && deadlineRings(plan, st, g, now, exact))
-            if (rings && !alarms) null else Due(g, due)
+            if (ring != null && !alarms) null else Due(g, due)
         }
 
-    /** What one group's fire was: its step, whether it brings Tela cheia (once per dose), and whether it rings the
-     * alarm (whose post brings the full screen too, every time it rings: [post]). */
+    /** What one group's fire was: its step, whether it brings the full screen (Tela cheia once per dose; a promise's
+     * deadline whenever Tela cheia is on), and whether it rings the alarm (whose post brings the full screen too, every
+     * time it rings: [post]). */
     class Fire(val group: Group, val step: Step, val fullScreen: Boolean, val rings: Boolean)
 
     /**
      * One post for [dues], one number for all of them, for their doses under no promise (a promise whose deadline came is
      * over). Each group moves to its step, counts one more reminder (a promised dose sits it out), and sets its next one
-     * gap after now. The full screen comes once per dose; the alarm rings only with exact access. Returns the fires, the
-     * post's number being [State.nag].
+     * gap after now. Tela cheia comes once per dose; a promise's deadline brings the full screen whenever Tela cheia is
+     * on, even after the dose had it, and doesn't spend the dose's (Glauco, 2026-11-25); the alarm rings only with exact
+     * access, never at a deadline. With [standIn] (the alarm can't open its screen: no full-screen access, the app not in
+     * front; and Pinkoo may draw over other apps), an alarm that rings brings the bubble and the opening at her unlock
+     * in its place ([Group.standIn]). Returns the fires, the post's number being [State.nag].
      */
-    fun fire(plan: Plan, st: State, dues: List<Due>, now: Long, out: MutableList<Event>, exact: Boolean): List<Fire> {
+    fun fire(plan: Plan, st: State, dues: List<Due>, now: Long, out: MutableList<Event>, exact: Boolean, standIn: Boolean = false): List<Fire> {
         if (dues.isEmpty()) return emptyList()
         val nag = st.nag + 1
         val fires = ArrayList<Fire>()
@@ -317,7 +317,6 @@ internal object Rules {
             val rings = exact && when (due.step) {
                 Step.ALARM -> true
                 Step.NOTIFY -> alarm(plan, st, g) == Alarm.ON_TIME
-                Step.DEADLINE -> deadlineRings(plan, st, g, now, true)
                 else -> false
             }
             release(plan, st, g, now)
@@ -329,8 +328,14 @@ internal object Rules {
                 else -> g.step = due.step
             }
             g.last = due.step
-            val full = due.step == Step.FULL && nagged.any { st.doses[it.key]?.full != true }
-            if (due.step == Step.FULL) { for (d in nagged) st.doses[d.key]?.full = true; g.unlocked = false }
+            val full = when (due.step) {
+                Step.FULL -> nagged.any { st.doses[it.key]?.full != true }
+                Step.DEADLINE -> plan.steps.fullScreen
+                else -> false
+            }
+            g.standIn = rings && standIn
+            if (due.step == Step.FULL) for (d in nagged) st.doses[d.key]?.full = true
+            if (due.step == Step.FULL || g.standIn) g.unlocked = false
             g.fires++
             for (d in open(plan, st, g)) st.doses[d.key]?.let { if (it.until != null) it.behind++ }
             g.state = if (rings) "ringing" else "pending"
@@ -474,17 +479,17 @@ internal object Rules {
         return gs.isNotEmpty()
     }
 
-    /** The bubble sent to the nest in post [nag]: it stays away for the step of every group inside De novo, across a
-     * process death; it logs nothing. */
+    /** The bubble sent to the nest in post [nag]: it stays away for the step of every group whose step brings it
+     * ([bubbles]), across a process death; it logs nothing. */
     fun nested(plan: Plan, st: State, nag: Int) {
-        for (g in st.groups.values) if (g.last == Step.AGAIN && (g.nag == nag || nag == 0)) g.nested = true
+        for (g in st.groups.values) if (bubbles(plan, g) && (g.nag == nag || nag == 0)) g.nested = true
     }
 
-    /** The nag route opened at her unlock: every group waiting for it after its full screen is done waiting (once per
-     * dose, item 12). Whether one was. */
+    /** The nag route opened at her unlock: every group waiting for it (after its full screen, or an alarm that rang
+     * without its screen) is done waiting (once per step, item 12). Whether one was. */
     fun unlocked(st: State): Boolean {
         var any = false
-        for (g in st.groups.values) if (g.last == Step.FULL && !g.unlocked) { g.unlocked = true; any = true }
+        for (g in st.groups.values) if ((g.last == Step.FULL || g.standIn) && !g.unlocked) { g.unlocked = true; any = true }
         return any
     }
 
@@ -529,7 +534,7 @@ internal object Rules {
         }
         for (g in groupsOf(plan, st, keys)) if (g.state != "done") {
             settle(plan, st, g)
-            if (g.state == "promised" && g.last == Step.FULL) g.unlocked = true
+            if (g.state == "promised" && (g.last == Step.FULL || g.standIn)) g.unlocked = true
         }
     }
 
@@ -544,19 +549,26 @@ internal object Rules {
         if (st.planAt == 0L || st.staleShown == st.planAt || plan.idle.afterDays == 0) null
         else st.planAt + plan.idle.afterDays * 24L * 60 * 60_000
 
+    /** Whether [g]'s last post brings the bubble: De novo and a promise's deadline with Bolinha on, and an alarm that
+     * rang without its screen ([Group.standIn]), Bolinha on or off. */
+    private fun bubbles(plan: Plan, g: Group): Boolean =
+        (plan.steps.bubble && (g.last == Step.AGAIN || g.last == Step.DEADLINE)) || g.standIn
+
     /** When the bubble of [g] leaves by itself: at its next step, or one gap after it came when none follows. Null
-     * when it isn't showing for [g] (not inside De novo, Bolinha off, sent to the nest, nothing to remind). */
+     * when it isn't showing for [g] (its step brings none, [bubbles]; sent to the nest; nothing to remind). */
     fun bubbleEnd(plan: Plan, st: State, g: Group, zone: ZoneId = ZoneId.systemDefault()): Long? {
-        if (!plan.steps.bubble || g.last != Step.AGAIN || g.nested || g.muted || (g.state != "pending" && g.state != "ringing")) return null
+        if (!bubbles(plan, g) || g.nested || g.muted || (g.state != "pending" && g.state != "ringing")) return null
         if (nagged(plan, st, g).isEmpty()) return null
         val fired = g.lastFiredAt ?: return null
         return upcoming(plan, st, g, zone)?.second ?: (fired + gap(plan, Step.FULL, g.repeats))
     }
 
-    /** Until when the nag screen opens at her first unlock for [g] ("Abrir quando eu desbloquear"): from its full
-     * screen until its next step, at most [UNLOCK_MS]; null when not waiting. */
+    /** Until when the nag screen opens at her first unlock for [g]: from its full screen with "Abrir quando eu
+     * desbloquear" on, or from an alarm that rang without its screen ([Group.standIn], the switch on or off), until its
+     * next step, at most [UNLOCK_MS]; null when not waiting. */
     fun unlockEnd(plan: Plan, st: State, g: Group, exact: Boolean, zone: ZoneId = ZoneId.systemDefault()): Long? {
-        if (!plan.steps.unlock || g.last != Step.FULL || g.unlocked || g.muted || (g.state != "pending" && g.state != "ringing")) return null
+        val waits = (plan.steps.unlock && g.last == Step.FULL) || g.standIn
+        if (!waits || g.unlocked || g.muted || (g.state != "pending" && g.state != "ringing")) return null
         if (nagged(plan, st, g).isEmpty()) return null
         val fired = g.lastFiredAt ?: return null
         return listOfNotNull(upcoming(plan, st, g, zone)?.second, alarmAt(plan, st, g, exact, zone), fired + UNLOCK_MS).min()
@@ -579,10 +591,7 @@ internal object Rules {
             // A group silenced with notifications off waits for them, its deadlines too: only its lapse wakes it.
             if (g.state == "done" || g.muted || open(plan, st, g).isEmpty()) continue
             ringEnd(g)?.let { steps += it }
-            for (d in open(plan, st, g)) {
-                val u = until(st, d) ?: continue
-                if (exact && d.alarm == Alarm.ON_TIME) alarms += u else steps += u
-            }
+            for (d in open(plan, st, g)) until(st, d)?.let { steps += it }
             val up = upcoming(plan, st, g, zone)
             val ring = alarmAt(plan, st, g, exact, zone)
             ring?.let { alarms += it }
@@ -598,10 +607,11 @@ internal object Rules {
     /**
      * The post for [fires] (their number [nag]): the earliest firing group's step, channel (its first dose's sound),
      * face and line; every open dose not under a promise and not dismissed named; the full screen when a firing group
-     * enters Tela cheia, and whenever a firing group rings the alarm (Glauco, 2026-11-24: the alarm wakes the screen and
-     * opens the nag route ringing, every time; it isn't the dose's Tela cheia, which stays once per dose); the alarm
-     * while one rings, any step with it folded in, silent; her sound otherwise, but in [front] (the app plays it) and for
-     * the full screen (silent over the lock screen).
+     * enters Tela cheia or reaches a promise's deadline with Tela cheia on, and whenever a firing group rings the alarm
+     * (Glauco, 2026-11-24: the alarm wakes the screen and opens the nag route ringing, every time; neither is the dose's
+     * Tela cheia, which stays once per dose); the alarm while one rings, any step with it folded in, silent; her sound
+     * otherwise, but in [front] (the app plays it) and for Tela cheia (silent over the lock screen). A deadline's full
+     * screen sounds: it brings everything but the alarm (Glauco, 2026-11-25).
      */
     fun post(plan: Plan, st: State, nag: Int, fires: List<Fire>, front: Boolean, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post {
         val lead = fires.minBy { it.group.group }
@@ -627,11 +637,11 @@ internal object Rules {
             .copy(title = fill(title, names(plan, st, shown), WallClock.epoch(lead.group, zone), zone))
     }
 
-    /** The bubble's post: the earliest group inside its De novo step with Bolinha on, not sent to the nest, before its
-     * end ([bubbleEnd]); null with none. */
+    /** The bubble's post: the earliest group whose step brings it (De novo or a deadline with Bolinha on, an alarm that
+     * rang without its screen), not sent to the nest, before its end ([bubbleEnd]); null with none. */
     fun bubble(plan: Plan, st: State, now: Long, zone: ZoneId = ZoneId.systemDefault()): Post? {
         val g = st.groups.values.filter { g -> bubbleEnd(plan, st, g, zone)?.let { it > now } == true }.minByOrNull { it.group } ?: return null
-        return view(plan, st, g.nag, g, Step.AGAIN, listOf(g.group), now, zone)
+        return view(plan, st, g.nag, g, g.last ?: Step.AGAIN, listOf(g.group), now, zone)
             .copy(title = fill(plan.texts.title, names(plan, st, listOf(g)), WallClock.epoch(g.group, zone), zone))
     }
 
@@ -682,11 +692,8 @@ internal object Rules {
         val fires = g?.let { fires(st, it, d) } ?: 0
         val live = own == "open" && promise == null && g != null
         val up = if (live) upcoming(plan, st, g!!, zone) else null
-        val alarmAt = when {
-            promise != null -> promise.takeIf { exact && d.alarm == Alarm.ON_TIME }
-            live -> alarmAt(plan, st, g!!, exact, zone)
-            else -> null
-        }
+        // A promise's deadline never rings: the dose's alarm is a step of its thread again after it.
+        val alarmAt = if (live) alarmAt(plan, st, g!!, exact, zone) else null
         JSONObject().put("key", d.key).put("state", state).put("step", g?.last?.let(::word) ?: JSONObject.NULL)
             .put("fires", fires).put("rung", minOf(maxOf(fires - 1, 0), Plan.TOP))
             .put("nextAt", (if (promise != null) promise else up?.second) ?: JSONObject.NULL)

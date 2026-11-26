@@ -179,6 +179,10 @@ internal object Engine {
      * Item 20: with notifications off nothing can reach her, but a step due with the app in front still tells it, as
      * a silent post ([Rules.silent], [State.silent]) that the app opens without a sound. In the background it is only
      * muted.
+     *
+     * An alarm that can't open its screen (no full-screen access, the app not in front) while Pinkoo may draw over other
+     * apps brings the bubble with its ring and opens the nag screen at her unlock instead ([Group.standIn]; Glauco,
+     * 2026-11-25: she unlocked to stop it and couldn't find the app). Without "Aparecer por cima" nothing changes.
      */
     @Synchronized fun fire(c: Context, now: Long = now(), by: Int = Chain.STEP) {
         val (plan, st) = load(c, now) ?: return Chain.arm(c, Rules.Arm(null, null), now)
@@ -195,7 +199,8 @@ internal object Engine {
             val shown = screen
             val told = front && due.none { d -> plan.doses(d.group.group).any { it.key in shown } }
             if (stoppable) {
-                val fires = Rules.fire(plan, st, due, now, events, exact)
+                val standIn = !front && !FullScreen.allowed(c) && Bubble.allowed(c)
+                val fires = Rules.fire(plan, st, due, now, events, exact, standIn)
                 if (fires.isNotEmpty()) {
                     if (front) st.quiet = st.nag
                     st.front = if (told) st.nag else 0

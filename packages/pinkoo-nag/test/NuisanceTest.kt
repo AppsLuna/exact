@@ -212,6 +212,56 @@ internal class NuisanceTest : SurfaceCase() {
         assertFalse("nor a later refresh", Unlock.waiting)
     }
 
+    /**
+     * The alarm without full-screen access (Glauco, 2026-11-25: on her S24 it rang, she unlocked to stop it and couldn't
+     * find Pinkoo), through the real engine and surface, Bolinha and "Abrir quando eu desbloquear" off: with "Aparecer
+     * por cima" the bubble's window comes with the ring, and the unlock that silences it opens the nag route, once; the
+     * bubble stays until the next step. Without the overlay nothing changes.
+     */
+    @Test fun anAlarmWithoutItsFullScreenBringsTheBubbleAndOpensAtTheUnlock() {
+        Told.reset()
+        media(Settings.System.DEFAULT_ALARM_ALERT_URI)
+        ShadowSettings.setCanDrawOverlays(true)
+        assertFalse("Android 14: no full-screen access", FullScreen.allowed(app))
+        phone(locked = true, on = false)
+        val p = planJson(dose("a@2026-11-18T08:00", "2026-11-18T08:00", alarm = "afterAll", name = "Pill A"))
+            .apply { getJSONObject("steps").put("bubble", false).put("unlock", false) }
+        Engine.schedule(app, p, at("2026-11-18T07:00"))
+        for (t in listOf("08:00", "08:20", "08:35")) { clock = at("2026-11-18T$t"); Engine.fire(app, clock) }
+        assertFalse("no bubble before the ring", Bubble.shown)
+        assertFalse(Unlock.waiting)
+        clock = at("2026-11-18T08:50")
+        Engine.fire(app, clock)
+        serve()
+        assertNotNull("it rings", NagService.ring)
+        assertNull("no full-screen intent on the alarm's notification", nag()!!.notification.fullScreenIntent)
+        assertTrue("the bubble's window, Bolinha off", Bubble.shown)
+        assertTrue("the unlock awaited, the switch off", Unlock.waiting)
+        // She unlocks: the ring stops and the nag route opens.
+        clock = at("2026-11-18T08:51")
+        phone(locked = false, on = true)
+        broadcast(Intent.ACTION_USER_PRESENT)
+        assertNull("the unlock silenced it", NagService.ring)
+        val opened = shadowOf(app).nextStartedActivity
+        assertTrue(opened.toUri(0), opened.toUri(0).contains("unlock"))
+        assertFalse("once", Unlock.waiting)
+        Engine.restore(app, at("2026-11-18T08:52"), front = true)
+        assertFalse("the resume after it waits for nothing", Unlock.waiting)
+        assertTrue("the bubble stays for its step", Bubble.shown)
+        clock = at("2026-11-18T09:20")
+        Engine.fire(app, clock)
+        assertFalse("gone at the next step", Bubble.shown)
+        // Without "Aparecer por cima": the ring alone, as before.
+        Store.clear(app); NagService.ring = null; NagService.rang = 0; Shade.forget(); nm.cancelAll()
+        ShadowSettings.setCanDrawOverlays(false)
+        phone(locked = true, on = false)
+        Engine.schedule(app, p, at("2026-11-18T07:00"))
+        for (t in listOf("08:00", "08:20", "08:35", "08:50")) { clock = at("2026-11-18T$t"); Engine.fire(app, clock) }
+        assertNotNull(NagService.ring)
+        assertFalse(Bubble.shown)
+        assertFalse(Unlock.waiting)
+    }
+
     // MARK: the ring service (item 9) and the stop contract (item 10)
 
     /**

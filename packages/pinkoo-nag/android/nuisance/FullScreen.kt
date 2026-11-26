@@ -9,7 +9,9 @@
 // The alarm's notification carries the same intent every time the alarm rings (`Shade.build`, Glauco 2026-11-24),
 // whenever [allowed]: there [now] isn't asked, since Android itself shows a heads-up to a phone in use, and the alarm
 // passes Do Not Disturb as an alarm (unless she lets it block alarms, when Android holds both). It counts as no Tela
-// cheia.
+// cheia. Without the access, the bubble and the opening at her unlock stand in for the alarm's screen when Pinkoo may
+// draw over other apps (`Group.standIn`). A promise's deadline brings Tela cheia's intent whenever Tela cheia is on, on
+// her reminder channel, sounding (Glauco, 2026-11-25).
 package pinkoo.nag
 
 import android.app.KeyguardManager

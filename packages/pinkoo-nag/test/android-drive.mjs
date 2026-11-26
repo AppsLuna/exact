@@ -25,9 +25,9 @@
 //  3. "Já na hora": the alarm rings at the dose time with the notification folded into it (only the ring sounds) on a
 //     dark phone, turns the screen on with the route over the keyguard, and keeps ringing past its own post and that
 //     wake; the power key stops it. De novo, then a promise: its countdown
-//     (a Live Update on 36.1 and later), nothing else while it runs, the alarm clock at the deadline; there the alarm
-//     rings again, folded, stops at its 60 s cap (logged as its timeout, read by the engine's own answer: the fixture's
-//     "State"), and the thread goes on with a repeat.
+//     (a Live Update on 36.1 and later), nothing else while it runs, code 0 (no alarm clock) at the deadline; there her
+//     notification sounds and nothing rings (Glauco, 2026-11-25: a deadline brings everything but the alarm, "Já na
+//     hora" included), and the thread goes on with a repeat. The cap is group 1's.
 //  4. The bubble over the launcher's home screen (Settings and Files hide other apps' overlays): the face and, beside it
 //     on the screen, its balloon; a long press on the balloon reaches the launcher under it (its own menu opens:
 //     Android's untrusted-touch rule), the balloon goes after about 6 s; a tap on the face opens the nag route; the face
@@ -612,7 +612,7 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       stayOn(false);
     });
 
-    await group(3, '"Já na hora", the power key, a promise and the cap', async () => {
+    await group(3, '"Já na hora", the power key, and a promise whose deadline never rings', async () => {
       launch();
       const [T] = await plan('On time');
       const a0 = alarms();
@@ -654,40 +654,25 @@ export async function drive({ root, apk, id, emulator, check, run, out, only = n
       if (sdk >= 36 && sdkFull !== '36.0') c(3, 'the promise is a Live Update', promoted, null);
       else c(3, `no Live Update on this image (${sdkFull})`, !promoted, null);
       const ad = alarms();
-      c(3, 'the alarm clock at its deadline ("Já na hora": the deadline is her time)', ad.some((a) => a.clock && near(a.at, deadline, 3000)), `${list(ad)} deadline ${hhmm(deadline)}`);
+      c(3, 'no alarm clock for the deadline, code 0 at it (a deadline never rings)', !ad.some((a) => a.clock) && ad.some((a) => a.exact && near(a.at, deadline, 3000)),
+        `${list(ad)} deadline ${hhmm(deadline)}`);
       home();
       await wait(3000);
       c(3, 'promised: nothing holds the process', !serving(), services().slice(0, 300));
-      // Its full screen turns the screen on and the fixture's route keeps nothing awake: the screen kept on, so nothing
-      // but the cap ends the ring (the screen timing out would count as the power key).
-      stayOn(true);
       sleep();
-      const ring2 = await until(() => playing(), deadline + 25_000 - deviceNow(), 500);
-      const ring2At = deviceNow();
-      c(3, 'at the deadline the alarm rings again, on time', ring2 && ring2At - deadline < ON_TIME, `${((ring2At - deadline) / 1000).toFixed(1)} s`);
-      const key2 = soundKey();
-      c(3, 'folded: none of its posts sounds', !records().some((r) => r.key === key2), key2);
-      const quiet = await until(() => !playing(), 80_000, 1000);
-      const quietAt = deviceNow();
-      c(3, 'unanswered, it stops at its 60 s cap', quiet && quietAt - ring2At > 50_000 && quietAt - deadline < 75_000, `${((quietAt - ring2At) / 1000).toFixed(0)} s`);
-      stayOn(false);
+      const d = await posted(deadline - 5000, deadline + 25_000);
+      c(3, 'at the deadline her notification, on her channel, sounding, on time', d && channelOf(d, 'sininho') && (await sounded(d)) && d.created - deadline < ON_TIME,
+        `${late(d, deadline)} ${d?.channel}`);
+      await wait(3000);
+      c(3, 'and nothing rings: no ring, no alarm notification', !playing() && !alarmPost(), alarmPost()?.raw ?? null);
       const r = await posted(deadline + 30_000, deadline + 2 * MIN + 30_000);
       c(3, 'then the thread goes on: a repeat, with her sound and no ring', r && (await sounded(r)) && !playing(), late(r, deadline + 2 * MIN));
-      const before3 = `pid ${pid()}\n${sh(`dumpsys activity activities | grep -E "ActivityRecord\\{.*${id}"`)}\n${list(alarms())}`;
-      // The phone is still dark and locked from the deadline: opened first, or the app stays paused under the keyguard,
-      // its screen what it last drew and taps landing on the keyguard.
+      // The phone is still dark and locked from the deadline: opened first, or the app stays paused under the keyguard.
       await open();
       launch();
-      // What the engine answers, by a call of its own (the fixture's "State"), and what the screen's resource shows: the
-      // check is the engine's; a resource still showing the promise is the app runtime's (it is recorded beside it).
       await until(() => line('events '), 8000, 700);
-      const shown3 = `${line('events ')} | ${line('doses ')}`;
-      await act('State');
-      const told = await until(() => find(/^state /)?.text, 8000, 700) ?? '';
-      if (!/timeout/.test(shown3) && /timeout/.test(told)) console.log(`   3. the screen's resource still showed ${shown3}; the engine's call said ${told}`);
-      save('03-events.txt', [`engine: ${told}\nscreen: ${shown3}\n${top()}\npid ${pid()}`, `after the promise:\n${promisedWith}`, `before the launch:\n${before3}`,
+      save('03-events.txt', [`${line('events ')} | ${line('doses ')}\n${top()}\npid ${pid()}`, `after the promise:\n${promisedWith}`,
         logcat().split('\n').filter((l) => /pinkoo|nagfixture|exact/i.test(l) && !/attributionTag/.test(l)).slice(-120).join('\n')].join('\n\n----\n'));
-      c(3, 'the cap is logged as the alarm\'s timeout', /\bignored:timeout\b/.test(told), `engine: ${told} | screen: ${shown3}`);
     });
 
     await group(4, 'the bubble over another app', async () => {
